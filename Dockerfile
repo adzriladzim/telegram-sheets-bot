@@ -11,7 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Data (users.json, usage.json, logs) — mount Railway Volume ke /app/data biar persist
-VOLUME ["/app/data"]
+# Data (users.json, usage.json, logs) persist via Railway Volume mounted at /app/data
+# (jangan pakai instruksi VOLUME — Railway menolaknya)
 
 CMD ["python", "bot.py"]
