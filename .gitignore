@@ -1,0 +1,16 @@
+# secrets
+.env
+service_account*.json
+*credentials*.json
+
+# runtime state
+data/
+*.log
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
