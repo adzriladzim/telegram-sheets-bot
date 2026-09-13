@@ -341,32 +341,35 @@ async def _confirm(message: Message, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
-    if q.data.endswith(":no"):
-        await q.message.reply_text("Dibatalkan. Kirim /log untuk coba lagi.")
-        return ConversationHandler.END
-    rec = _build_record(context)
-    retries = context.user_data.get("_retries", 0)
-    busy = await q.message.reply_text("⏳ Menyimpan ke Zoom Record...")
-    try:
-        await _sheets(context).append_record(rec)
-    except sheets.SheetsError as exc:
-        retries += 1
-        context.user_data["_retries"] = retries
+    # Per-chat lock: same-chat updates can run concurrently now (concurrent_updates=True).
+    # Serialize the gspread write so double-tap Submit can't double-write.
+    async with _sheets(context).for_chat(update.effective_chat.id):
+        if q.data.endswith(":no"):
+            await q.message.reply_text("Dibatalkan. Kirim /log untuk coba lagi.")
+            return ConversationHandler.END
+        rec = _build_record(context)
+        retries = context.user_data.get("_retries", 0)
+        busy = await q.message.reply_text("⏳ Menyimpan ke Zoom Record...")
+        try:
+            await _sheets(context).append_record(rec)
+        except sheets.SheetsError as exc:
+            retries += 1
+            context.user_data["_retries"] = retries
+            try: await busy.delete()
+            except: pass
+            if retries >= 3:
+                await q.message.reply_text(f"⚠️ Gagal 3x: {exc}\nData tidak tersimpan. Kirim /log untuk mulai ulang.")
+                context.user_data.clear()
+                return ConversationHandler.END
+            await q.message.reply_text(f"⚠️ Gagal simpan ({retries}/3): {exc}\nTekan ✅ untuk retry, atau /cancel untuk batal.")
+            return CONFIRM
         try: await busy.delete()
         except: pass
-        if retries >= 3:
-            await q.message.reply_text(f"⚠️ Gagal 3x: {exc}\nData tidak tersimpan. Kirim /log untuk mulai ulang.")
-            context.user_data.clear()
-            return ConversationHandler.END
-        await q.message.reply_text(f"⚠️ Gagal simpan ({retries}/3): {exc}\nTekan ✅ untuk retry, atau /cancel untuk batal.")
-        return CONFIRM
-    try: await busy.delete()
-    except: pass
-    log.info("Saved record: %s mtg %s scheme %s", rec.code, rec.meeting, rec.scheme)
-    usage.log(update.effective_chat.id, rec.facilitator, "zoom", rec.code)
-    await q.message.reply_text(f"✅ Tercatat di sheet! {rec.code} — pertemuan {rec.meeting} ({rec.scheme}).\nKirim /log untuk entry berikutnya.")
-    context.user_data.clear()
-    return ConversationHandler.END
+        log.info("Saved record: %s mtg %s scheme %s", rec.code, rec.meeting, rec.scheme)
+        usage.log(update.effective_chat.id, rec.facilitator, "zoom", rec.code)
+        await q.message.reply_text(f"✅ Tercatat di sheet! {rec.code} — pertemuan {rec.meeting} ({rec.scheme}).\nKirim /log untuk entry berikutnya.")
+        context.user_data.clear()
+        return ConversationHandler.END
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

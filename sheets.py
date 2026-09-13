@@ -8,6 +8,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import partial
@@ -27,6 +29,11 @@ _rekap_status_cache: dict = {}
 _rekap_tab_cache: dict = {}
 _CACHE_TTL = 120
 _feedback_cache: dict = {"rows": None, "ts": 0}
+# Whole-sheet row caches: (ss_id, title) -> (ts, rows). Mutated only inside
+# _run()'s single-flight lock, so no extra synchronization needed.
+_rows_cache: dict[tuple[str, str], tuple[float, list[list[str]]]] = {}
+_tabs_cache: dict[str, tuple[float, list[str]]] = {}
+_ROWS_TTL = 300
 SCHOOL_KEYWORDS = {
     "school of ai & computer science": ["computer science", "artificial intelligence", "informatics", "information system", "data science", "ai &"],
     "school of engineering": ["industrial engineering", "electrical engineering", "engineering"],
@@ -274,7 +281,8 @@ class SheetsClient:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
         self._gc: gspread.Client | None = None
-        self._lock = asyncio.Lock()
+        self._lock = asyncio.Lock()  # single-flight for ALL gspread I/O
+        self._chat_locks: dict[int, asyncio.Lock] = {}
 
     # ---------- sync internals ----------
 
@@ -284,21 +292,58 @@ class SheetsClient:
             self._gc = gspread.authorize(creds)
         return self._gc
 
-    def _sheet(self, title: str) -> gspread.Worksheet:
+    def _ss(self, ss_id: str) -> gspread.Spreadsheet:
         try:
-            ss = self._client().open_by_key(self.cfg.sheet_id)
-            return ss.worksheet(title)
+            return self._client().open_by_key(ss_id)
         except gspread.exceptions.APIError as exc:
             raise SheetsError(f"Google API error: {exc.response.status_code}") from exc
+
+    def _sheet_in(self, ss_id: str, title: str) -> gspread.Worksheet:
+        try:
+            return self._ss(ss_id).worksheet(title)
         except gspread.exceptions.WorksheetNotFound as exc:
             raise SheetsError(f"Sheet '{title}' tidak ditemukan — cek nama tab / config.") from exc
+
+    def _cached_rows(self, ss_id: str, title: str) -> list[list[str]]:
+        """Whole-sheet get_all_values with TTL. Safe: only called under _run single-flight."""
+        key = (ss_id, title)
+        hit = _rows_cache.get(key)
+        if hit and time.time() - hit[0] < _ROWS_TTL:
+            return hit[1]
+        rows = self._sheet_in(ss_id, title).get_all_values()
+        _rows_cache[key] = (time.time(), rows)
+        return rows
+
+    def _invalidate_rows(self, ss_id: str, title: str | None = None) -> None:
+        """Write-through: drop cached rows after a successful write."""
+        for k in [k for k in _rows_cache if k[0] == ss_id and (title is None or k[1] == title)]:
+            _rows_cache.pop(k, None)
+
+    def _tabs(self, ss_id: str) -> list[str]:
+        """Worksheet titles of a spreadsheet (cached 10 min)."""
+        hit = _tabs_cache.get(ss_id)
+        if hit and time.time() - hit[0] < 600:
+            return hit[1]
+        titles = [w.title for w in self._ss(ss_id).worksheets()]
+        _tabs_cache[ss_id] = (time.time(), titles)
+        return titles
+
+    @asynccontextmanager
+    async def for_chat(self, chat_id: int):
+        """Per-chat async lock — serializes a chat's gspread-write handlers under
+        concurrent_updates=True so double-taps can't interleave or double-write."""
+        lock = self._chat_locks.setdefault(chat_id, asyncio.Lock())
+        async with lock:
+            yield
+
+    def _sheet(self, title: str) -> gspread.Worksheet:
+        return self._sheet_in(self.cfg.sheet_id, title)
 
     def _normalize(self, v: str) -> str:
         return re.sub(r"\s+", " ", (v or "").strip()).casefold()
 
     def _fetch_classes(self, facilitator_name: str) -> list[ClassEntry]:
-        ws = self._sheet(self.cfg.master_sheet)
-        rows = ws.get_all_values()
+        rows = self._cached_rows(self.cfg.sheet_id, self.cfg.master_sheet)
         target = self._normalize(facilitator_name)
         out: list[ClassEntry] = []
         for i, row in enumerate(rows):
@@ -341,10 +386,11 @@ class SheetsClient:
     WRITE_COLS = [0, 1, 2, 3, 4, 6, 7, 11, 12, 13]  # as_row indices
 
     def _append_record(self, rec: LogRecord) -> int:
-        ws = self._sheet(self.cfg.zoom_record_sheet)
+        ss = self._ss(self.cfg.sheet_id)
+        ws = ss.worksheet(self.cfg.zoom_record_sheet)
         row_data = rec.as_row()
         # Find first truly empty row: ALL columns B-O must be empty
-        all_vals = ws.get_all_values()
+        all_vals = self._cached_rows(self.cfg.sheet_id, self.cfg.zoom_record_sheet)
         insert_row = len(all_vals) + 1  # default: append at end
         for i, r in enumerate(all_vals):
             if i == 0:
@@ -358,15 +404,16 @@ class SheetsClient:
             if not has_data:
                 insert_row = i + 1  # 1-indexed
                 break
-        # Write only to unprotected columns: B,C,D,E,F,H,I,M,N,O
+        # Write only to unprotected columns: B,C,D,E,F,H,I,M,N,O in ONE batch call
         # Map: as_row index -> column letter
         unprotected_map = {
             0: "B", 1: "C", 2: "D", 3: "E", 4: "F",
             6: "H", 7: "I", 11: "M", 12: "N", 13: "O",
         }
-        for idx, col_letter in unprotected_map.items():
-            cell = f"{col_letter}{insert_row}"
-            ws.update(cell, [[row_data[idx]]], value_input_option="USER_ENTERED")
+        data = [{"range": f"{col}{insert_row}", "values": [[row_data[idx]]]}
+                for idx, col in unprotected_map.items()]
+        ss.values_batch_update({"valueInputOption": "USER_ENTERED", "data": data})
+        self._invalidate_rows(self.cfg.sheet_id, self.cfg.zoom_record_sheet)
         log.info("Wrote record %s/%s at row %d (unprotected cols only)", rec.code, rec.meeting, insert_row)
         return ws.row_count
 
@@ -402,8 +449,7 @@ class SheetsClient:
                         if self._normalize(k) == key:
                             return [v]
         except: pass
-        ws = self._sheet(self.cfg.master_sheet)
-        rows = ws.get_all_values()
+        rows = self._cached_rows(self.cfg.sheet_id, self.cfg.master_sheet)
         target = self._normalize(search)
         found = set()
         for i, row in enumerate(rows):
@@ -420,8 +466,7 @@ class SheetsClient:
     def _get_next_meeting(self, kode: str) -> tuple[str, str, str]:
         """Return (last_meeting_str, next_single, next_double). Scans Zoom Record col F=Kode, H=Pertemuan."""
         try:
-            ws = self._sheet(self.cfg.zoom_record_sheet)
-            rows = ws.get_all_values()
+            rows = self._cached_rows(self.cfg.sheet_id, self.cfg.zoom_record_sheet)
         except: return ("", "1", "1 dan 2")
         import re
         max_n = 0
@@ -447,8 +492,7 @@ class SheetsClient:
     def _get_done_map(self, facilitator_name: str) -> set[str]:
         """Set of kode already in Zoom Record for facilitator (any pertemuan) — for backward compat."""
         try:
-            ws = self._sheet(self.cfg.zoom_record_sheet)
-            rows = ws.get_all_values()
+            rows = self._cached_rows(self.cfg.sheet_id, self.cfg.zoom_record_sheet)
         except: return set()
         target = self._normalize(facilitator_name)
         done = set()
@@ -482,8 +526,7 @@ class SheetsClient:
     def _get_done_by_date(self, facilitator_name: str) -> set[tuple[str, str]]:
         """Set of (kode, tanggal_kelas) already in Zoom Record — for daily check (gabung: 1 entry cover 2 sesi)."""
         try:
-            ws = self._sheet(self.cfg.zoom_record_sheet)
-            rows = ws.get_all_values()
+            rows = self._cached_rows(self.cfg.sheet_id, self.cfg.zoom_record_sheet)
         except: return set()
         target = self._normalize(facilitator_name)
         done = set()
@@ -500,16 +543,18 @@ class SheetsClient:
     async def get_done_by_date(self, facilitator_name: str) -> set[tuple[str, str]]:
         return await self._run(partial(self._get_done_by_date, facilitator_name))
 
-    def _absen_sheet(self) -> gspread.Worksheet:
-        try:
-            ss = self._client().open_by_key(self.cfg.absen_sheet_id)
-            return ss.worksheet(self.cfg.absen_sheet_name)
-        except gspread.exceptions.WorksheetNotFound as exc:
-            raise SheetsError(f"Absen sheet '{self.cfg.absen_sheet_name}' tidak ditemukan.") from exc
-
-    def _all_absen_sheets(self) -> list[gspread.Worksheet]:
-        ss = self._client().open_by_key(self.cfg.absen_sheet_id)
-        return ss.worksheets()
+    def _all_absen_rows(self) -> dict[str, list[list[str]]]:
+        """All absen worksheet rows {title: rows} in ONE values.batchGet, cached per title."""
+        titles = self._tabs(self.cfg.absen_sheet_id)
+        now = time.time()
+        need = [t for t in titles
+                if not _rows_cache.get((self.cfg.absen_sheet_id, t))
+                or now - _rows_cache[(self.cfg.absen_sheet_id, t)][0] >= _ROWS_TTL]
+        if need:
+            resp = self._ss(self.cfg.absen_sheet_id).values_batch_get([f"'{t}'" for t in need])
+            for t, vr in zip(need, resp.get("valueRanges", []) or []):
+                _rows_cache[(self.cfg.absen_sheet_id, t)] = (now, vr.get("values", []) or [])
+        return {t: _rows_cache[(self.cfg.absen_sheet_id, t)][1] for t in titles}
 
     def _list_absen_kodes(self) -> list[str]:
         import time
@@ -517,8 +562,7 @@ class SheetsClient:
         if _absen_kodes_cache["data"] and now - _absen_kodes_cache["ts"] < 300:
             return _absen_kodes_cache["data"]
         kodes = []
-        for ws in self._all_absen_sheets():
-            rows = ws.get_all_values()
+        for rows in self._all_absen_rows().values():
             for r in rows:
                 if r[0].strip() == "Kode Kelas" and len(r) > 1 and r[1].strip():
                     kodes.append(r[1].strip())
@@ -534,8 +578,7 @@ class SheetsClient:
         key = kode.casefold()
         if key in _absen_students_cache and _absen_students_cache[key]:
             return _absen_students_cache[key]
-        for ws in self._all_absen_sheets():
-            rows = ws.get_all_values()
+        for rows in self._all_absen_rows().values():
             for i, r in enumerate(rows):
                 if r[0].strip() == "Kode Kelas" and len(r) > 1 and r[1].strip().casefold() == key:
                     nim_header = -1
@@ -562,9 +605,8 @@ class SheetsClient:
         return await self._run(partial(self._list_students, kode))
 
     def _locate_absen_block(self, kode: str):
-        """Return (ws, rows, nim_header_idx) for a Kode across all prodi sheets."""
-        for ws in self._all_absen_sheets():
-            rows = ws.get_all_values()
+        """Return (title, rows, nim_header_idx) for a Kode across all prodi sheets."""
+        for title, rows in self._all_absen_rows().items():
             for i, r in enumerate(rows):
                 if r[0].strip() == "Kode Kelas" and len(r) > 1 and r[1].strip().casefold() == kode.casefold():
                     nim_header = -1
@@ -574,12 +616,12 @@ class SheetsClient:
                             break
                     if nim_header == -1:
                         raise SheetsError("Header NIM tidak ditemukan")
-                    return ws, rows, nim_header
+                    return title, rows, nim_header
         raise SheetsError(f"Kode {kode} tidak ditemukan di sheet Absen (cek 15 prodi).")
 
     def _absen_counts(self, kode: str, pertemuan: int) -> dict:
         """Count statuses in a pertemuan column. P=S+O+SF+OF, Q=S+O, R=A, S_blm=SF+OF."""
-        ws, rows, nim_header = self._locate_absen_block(kode)
+        title, rows, nim_header = self._locate_absen_block(kode)
         if not 1 <= pertemuan <= 16:
             raise SheetsError("Pertemuan harus 1-16")
         col_idx = 3 + (pertemuan - 1)
@@ -603,8 +645,8 @@ class SheetsClient:
             if val == "I":
                 izin += 1
         return {"total": total, "hadir": hadir, "feedback": feedback,
-                "tidak": tidak, "belum": belum, "izin": izin, "sheet": ws.title,
-                "prodi": ws.title}
+                "tidak": tidak, "belum": belum, "izin": izin, "sheet": title,
+                "prodi": title}
 
     async def absen_counts(self, kode: str, pertemuan: int) -> dict:
         return await self._run(partial(self._absen_counts, kode, pertemuan))
@@ -612,7 +654,7 @@ class SheetsClient:
     def _resolve_absen(self, kode: str, identifiers: list[str]) -> dict:
         """Resolve identifiers to student rows. NIM wajib exact-penuh, Nama contains.
         Returns {matched: [(row_idx, nim, nama)], ambiguous: {ident: [nama]}, unmatched: [ident]}."""
-        ws, rows, nim_header = self._locate_absen_block(kode)
+        title, rows, nim_header = self._locate_absen_block(kode)
         roster = []
         for r_idx in range(nim_header + 2, len(rows)):
             if rows[r_idx][0].strip() == "Program Studi":
@@ -637,7 +679,7 @@ class SheetsClient:
                 ambiguous[ident] = [nm for _, _, nm in hits[:5]]
             else:
                 unmatched.append(ident)
-        return {"ws": ws, "rows": rows, "nim_header": nim_header,
+        return {"title": title, "rows": rows, "nim_header": nim_header,
                 "matched": matched, "ambiguous": ambiguous, "unmatched": unmatched}
 
     def _update_absen(self, kode: str, pertemuan: int, identifiers: list[str], status: str) -> dict:
@@ -646,18 +688,23 @@ class SheetsClient:
             raise SheetsError("Pertemuan harus 1-16")
         col_idx = 3 + (pertemuan - 1)
         col_letter = chr(ord('A') + col_idx)
-        ws = res["ws"]
+        title = res["title"]
         updated = 0
+        data = []
         for r_idx, _, _ in res["matched"]:
-            ws.update(f"{col_letter}{r_idx+1}", [[status]], value_input_option="USER_ENTERED")
+            data.append({"range": f"{col_letter}{r_idx+1}", "values": [[status]]})
             updated += 1
-        log.info("Updated absen %s pertemuan %d status %s: %d rows in sheet %s", kode, pertemuan, status, updated, ws.title)
+        if data:
+            self._ss(self.cfg.absen_sheet_id).values_batch_update(
+                {"valueInputOption": "USER_ENTERED", "data": data})
+            self._invalidate_rows(self.cfg.absen_sheet_id, title)
+        log.info("Updated absen %s pertemuan %d status %s: %d rows in sheet %s", kode, pertemuan, status, updated, title)
         if updated == 0 and not res["ambiguous"] and not res["unmatched"]:
             raise SheetsError("Tidak ada NIM/Nama yang cocok")
         return {"updated": updated, "ambiguous": res["ambiguous"],
                 "unmatched": res["unmatched"],
                 "names": [nm for _, _, nm in res["matched"][:10]],
-                "sheet": ws.title}
+                "sheet": title}
 
     async def update_absen(self, kode: str, pertemuan: int, identifiers: list[str], status: str) -> dict:
         return await self._run(partial(self._update_absen, kode, pertemuan, identifiers, status))
@@ -665,8 +712,7 @@ class SheetsClient:
     def _fetch_backup_classes(self, facilitator_name: str) -> list[ClassEntry]:
         """Classes where facilitator is listed as Fasil Pengganti in Backup sheet."""
         try:
-            ws = self._sheet(self.cfg.backup_sheet)
-            rows = ws.get_all_values()
+            rows = self._cached_rows(self.cfg.sheet_id, self.cfg.backup_sheet)
         except SheetsError:
             return []
         target = self._normalize(facilitator_name)
@@ -688,8 +734,7 @@ class SheetsClient:
             sks = ""
             semester = ""
             try:
-                master_ws = self._sheet(self.cfg.master_sheet)
-                mrows = master_ws.get_all_values()
+                mrows = self._cached_rows(self.cfg.sheet_id, self.cfg.master_sheet)
                 for mr in mrows:
                     if len(mr) > COL_KODE and mr[COL_KODE].strip().casefold() == kode.casefold():
                         zoom_no = mr[COL_ZOOM_NO].strip() if len(mr) > COL_ZOOM_NO else ""
@@ -731,7 +776,7 @@ class SheetsClient:
     def _append_backup_record(self, rec: BackupRecord) -> int:
         ws = self._sheet(self.cfg.backup_sheet)
         row_data = rec.as_row()
-        all_vals = ws.get_all_values()
+        all_vals = self._cached_rows(self.cfg.sheet_id, self.cfg.backup_sheet)
         insert_row = len(all_vals) + 1
         for i, r in enumerate(all_vals):
             if i < 2:
@@ -741,13 +786,14 @@ class SheetsClient:
                 insert_row = i + 1
                 break
         ws.update(f"B{insert_row}:J{insert_row}", [row_data], value_input_option="USER_ENTERED")
+        self._invalidate_rows(self.cfg.sheet_id, self.cfg.backup_sheet)
         log.info("Wrote backup %s/%s at row %d", rec.kode, rec.hari_tanggal, insert_row)
         return ws.row_count
 
     def _append_cancel_record(self, rec: CancelRecord) -> int:
         ws = self._sheet(self.cfg.cancel_sheet)
         row_data = rec.as_row()
-        all_vals = ws.get_all_values()
+        all_vals = self._cached_rows(self.cfg.sheet_id, self.cfg.cancel_sheet)
         insert_row = len(all_vals) + 1
         for i, r in enumerate(all_vals):
             if i == 0:
@@ -757,19 +803,16 @@ class SheetsClient:
                 insert_row = i + 1
                 break
         ws.update(f"B{insert_row}:I{insert_row}", [row_data], value_input_option="USER_ENTERED")
+        self._invalidate_rows(self.cfg.sheet_id, self.cfg.cancel_sheet)
         log.info("Wrote cancel %s/%s at row %d", rec.kode, rec.sesi, insert_row)
         return ws.row_count
 
-    def _rekap_ss(self):
-        return self._client().open_by_key(self.cfg.rekap_sheet_id)
-
     def _find_rekap_tab(self, facilitator_name: str) -> str:
         """Match registered name to per-fasil tab (nickname titles). Longest match wins."""
-        ss = self._rekap_ss()
         target = self._normalize(facilitator_name)
         best, best_len = None, 0
-        for ws in ss.worksheets():
-            t = ws.title.strip()
+        for t in self._tabs(self.cfg.rekap_sheet_id):
+            t = t.strip()
             if t in ("PENTING DIBACA", "Template"):
                 continue
             tn = self._normalize(t)
@@ -780,18 +823,14 @@ class SheetsClient:
         return best
 
     def _append_rekap_record(self, tab: str, rec: RekapRecord) -> int:
-        ss = self._rekap_ss()
-        try:
-            ws = ss.worksheet(tab)
-        except gspread.exceptions.WorksheetNotFound as exc:
-            raise SheetsError(f"Tab '{tab}' tidak ditemukan di Rekap.") from exc
+        ws = self._sheet_in(self.cfg.rekap_sheet_id, tab)
         row_data = rec.as_row()  # B..W (22 cols)
         # Kolom L: HYPERLINK klikabel "nama file" -> URL (format sama kayak data lama)
         if rec.bukti.startswith("http") and rec.bukti_name:
             url = rec.bukti.replace('"', "")
             name = rec.bukti_name.replace('"', "")
             row_data[10] = f'=HYPERLINK("{url}","{name}")'
-        all_vals = ws.get_all_values()
+        all_vals = self._cached_rows(self.cfg.rekap_sheet_id, tab)
         insert_row = len(all_vals) + 1
         for i, r in enumerate(all_vals):
             if i == 0:
@@ -801,8 +840,9 @@ class SheetsClient:
                 break
         no = str(insert_row - 1)
         ws.update(f"A{insert_row}:W{insert_row}", [[no] + row_data], value_input_option="USER_ENTERED")
-        log.info("Wrote rekap %s/%s at %s row %d", rec.kode, rec.pertemuan, tab, insert_row)
+        self._invalidate_rows(self.cfg.rekap_sheet_id, tab)
         _rekap_status_cache.clear()
+        log.info("Wrote rekap %s/%s at %s row %d", rec.kode, rec.pertemuan, tab, insert_row)
         return insert_row
 
     async def append_rekap_record(self, tab: str, rec: RekapRecord) -> int:
@@ -822,8 +862,7 @@ class SheetsClient:
         """Set of (kode, tanggal) already in user's rekap tab."""
         try:
             tab = self._find_rekap_tab(facilitator_name)
-            ws = self._rekap_ss().worksheet(tab)
-            rows = ws.get_all_values()
+            rows = self._cached_rows(self.cfg.rekap_sheet_id, tab)
         except SheetsError:
             return set()
         done = set()
@@ -841,8 +880,7 @@ class SheetsClient:
 
     def _rekap_match_rows(self, tab: str, kode: str, tanggal_list: list) -> list:
         """Rows (1-based idx, vals) matching kode + any accepted tanggal."""
-        ws = self._rekap_ss().worksheet(tab)
-        rows = ws.get_all_values()
+        rows = self._cached_rows(self.cfg.rekap_sheet_id, tab)
         out = []
         for i, r in enumerate(rows):
             if i == 0 or len(r) <= 4:
@@ -857,7 +895,7 @@ class SheetsClient:
                   "Pertemuan", "Tipe", "Sesi", "Peran", "Bukti"]
         try:
             rows = self._rekap_match_rows(tab, kode, tanggal_list)
-        except gspread.exceptions.WorksheetNotFound:
+        except (gspread.exceptions.WorksheetNotFound, SheetsError):
             return {"state": "none"}
         if not rows:
             return {"state": "none"}
@@ -874,16 +912,18 @@ class SheetsClient:
         return await self._run(partial(self._rekap_row_status, tab, kode, tanggal_list))
 
     def _rekap_row_values(self, tab: str, row_idx: int) -> list[str]:
-        ws = self._rekap_ss().worksheet(tab)
-        return ws.row_values(row_idx)
+        rows = self._cached_rows(self.cfg.rekap_sheet_id, tab)
+        return rows[row_idx - 1] if 0 < row_idx <= len(rows) else []
 
     async def rekap_row_values(self, tab: str, row_idx: int) -> list[str]:
         return await self._run(partial(self._rekap_row_values, tab, row_idx))
 
     def _update_rekap_cells(self, tab: str, row_idx: int, cells: dict) -> None:
-        ws = self._rekap_ss().worksheet(tab)
-        for col, val in cells.items():
-            ws.update(f"{col}{row_idx}", [[val]], value_input_option="USER_ENTERED")
+        data = [{"range": f"{col}{row_idx}", "values": [[val]]} for col, val in cells.items() if val != ""]
+        if data:
+            self._ss(self.cfg.rekap_sheet_id).values_batch_update(
+                {"valueInputOption": "USER_ENTERED", "data": data})
+            self._invalidate_rows(self.cfg.rekap_sheet_id, tab)
         log.info("Updated rekap %s row %d cols %s", tab, row_idx, sorted(cells))
 
     async def update_rekap_cells(self, tab: str, row_idx: int, cells: dict) -> None:
@@ -894,8 +934,7 @@ class SheetsClient:
         Complete = B..L all filled AND O filled. T-W excluded (manual/akademik)."""
         try:
             tab = self._find_rekap_tab(facilitator_name)
-            ws = self._rekap_ss().worksheet(tab)
-            rows = ws.get_all_values()
+            rows = self._cached_rows(self.cfg.rekap_sheet_id, tab)
         except SheetsError:
             return set(), set()
         complete, incomplete = set(), set()
@@ -925,7 +964,7 @@ class SheetsClient:
         return res
 
     def _sheet_rows(self, title: str) -> list[list[str]]:
-        return self._sheet(title).get_all_values()
+        return self._cached_rows(self.cfg.sheet_id, title)
 
     async def sheet_rows(self, title: str) -> list[list[str]]:
         return await self._run(partial(self._sheet_rows, title))
@@ -1079,6 +1118,19 @@ class SheetsClient:
 
     async def append_cancel_record(self, rec: CancelRecord) -> None:
         await self._run(partial(self._append_cancel_record, rec))
+
+    async def warmup(self) -> None:
+        """Seed caches at startup (bot.py post_init) and re-seed via periodic JobQueue
+        refresh. Best-effort: failures are logged, never crash boot."""
+        try:
+            await self._run(self._warmup)
+        except Exception as exc:
+            log.warning("Sheets warmup failed: %s", exc)
+
+    def _warmup(self) -> None:
+        for title in (self.cfg.master_sheet, self.cfg.zoom_record_sheet, self.cfg.backup_sheet):
+            _rows_cache.pop((self.cfg.sheet_id, title), None)  # force refresh, ignore TTL
+            self._cached_rows(self.cfg.sheet_id, title)
 
     async def _run(self, fn):
         loop = asyncio.get_running_loop()

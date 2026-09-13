@@ -189,25 +189,27 @@ async def _confirm(msg, context):
 
 async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query; await q.answer()
-    if q.data.endswith(":no"):
-        await q.message.reply_text("Dibatalkan.")
-        return ConversationHandler.END
-    chat_id = update.effective_chat.id
-    name = users.get(chat_id) or ""
-    c = context.user_data["bk_cls"]
-    rec = sheets.BackupRecord(name, context.user_data["bk_tanggal"], c.time_range, c.code, c.subject, c.lecturer, c.room, context.user_data["bk_pengganti"], context.user_data.get("bk_catatan",""))
-    busy = await st.saving(update, context, "⏳ Menyimpan ke sheet Backup...")
-    try:
-        await _sheets(context).append_backup_record(rec)
-    except sheets.SheetsError as e:
+    # Per-chat lock (see handlers/log.py confirm_cb).
+    async with _sheets(context).for_chat(update.effective_chat.id):
+        if q.data.endswith(":no"):
+            await q.message.reply_text("Dibatalkan.")
+            return ConversationHandler.END
+        chat_id = update.effective_chat.id
+        name = users.get(chat_id) or ""
+        c = context.user_data["bk_cls"]
+        rec = sheets.BackupRecord(name, context.user_data["bk_tanggal"], c.time_range, c.code, c.subject, c.lecturer, c.room, context.user_data["bk_pengganti"], context.user_data.get("bk_catatan",""))
+        busy = await st.saving(update, context, "⏳ Menyimpan ke sheet Backup...")
+        try:
+            await _sheets(context).append_backup_record(rec)
+        except sheets.SheetsError as e:
+            await st.unbusy(busy)
+            await q.message.reply_text(f"⚠️ Gagal: {e}\nCoba lagi.")
+            return CONFIRM
         await st.unbusy(busy)
-        await q.message.reply_text(f"⚠️ Gagal: {e}\nCoba lagi.")
-        return CONFIRM
-    await st.unbusy(busy)
-    usage.log(update.effective_chat.id, rec.facilitator_awal, "backup", rec.kode)
-    await q.message.reply_text(f"✅ Backup tercatat: {rec.kode} → {rec.pengganti}")
-    context.user_data.clear()
-    return ConversationHandler.END
+        usage.log(update.effective_chat.id, rec.facilitator_awal, "backup", rec.kode)
+        await q.message.reply_text(f"✅ Backup tercatat: {rec.kode} → {rec.pengganti}")
+        context.user_data.clear()
+        return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.effective_message.reply_text("Dibatalkan.")

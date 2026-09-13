@@ -350,37 +350,39 @@ async def back_to_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query; await q.answer()
-    if q.data.endswith(":no"):
-        await q.message.reply_text("Dibatalkan.")
-        return ConversationHandler.END
-    kode = context.user_data["absen_kode"]
-    per = context.user_data["absen_pertemuan"]
-    ids = context.user_data["absen_identifiers"]
-    status = context.user_data["absen_status"]
-    busy = await q.message.reply_text("⏳ Menyimpan absen ke sheet...")
-    try:
-        res = await _sheets(context).update_absen(kode, per, ids, status)
-    except sheets.SheetsError as e:
+    # Per-chat lock (see handlers/log.py confirm_cb).
+    async with _sheets(context).for_chat(update.effective_chat.id):
+        if q.data.endswith(":no"):
+            await q.message.reply_text("Dibatalkan.")
+            return ConversationHandler.END
+        kode = context.user_data["absen_kode"]
+        per = context.user_data["absen_pertemuan"]
+        ids = context.user_data["absen_identifiers"]
+        status = context.user_data["absen_status"]
+        busy = await q.message.reply_text("⏳ Menyimpan absen ke sheet...")
+        try:
+            res = await _sheets(context).update_absen(kode, per, ids, status)
+        except sheets.SheetsError as e:
+            try: await busy.delete()
+            except: pass
+            await q.message.reply_text(f"⚠️ Gagal: {e}")
+            return CONFIRM
         try: await busy.delete()
         except: pass
-        await q.message.reply_text(f"⚠️ Gagal: {e}")
-        return CONFIRM
-    try: await busy.delete()
-    except: pass
-    n = res["updated"]
-    extra = ""
-    if res["ambiguous"]:
-        amb = "; ".join(f"{k}→{', '.join(v[:2])}" for k, v in list(res["ambiguous"].items())[:3])
-        extra += f"\n⚠️ Ambigu (pakai NIM penuh): {amb}"
-    if res["unmatched"]:
-        extra += f"\n❌ Tak ketemu: {', '.join(res['unmatched'][:5])}"
-    await q.message.reply_text(f"✅ Absen tercatat: {kode} pertemuan {per} → {n} mahasiswa status {status}{extra}")
-    # Log usage
-    import usage
-    try: usage.log(update.effective_chat.id, users.get(update.effective_chat.id) or "", "absen", kode)
-    except: pass
-    context.user_data.clear()
-    return ConversationHandler.END
+        n = res["updated"]
+        extra = ""
+        if res["ambiguous"]:
+            amb = "; ".join(f"{k}→{', '.join(v[:2])}" for k, v in list(res["ambiguous"].items())[:3])
+            extra += f"\n⚠️ Ambigu (pakai NIM penuh): {amb}"
+        if res["unmatched"]:
+            extra += f"\n❌ Tak ketemu: {', '.join(res['unmatched'][:5])}"
+        await q.message.reply_text(f"✅ Absen tercatat: {kode} pertemuan {per} → {n} mahasiswa status {status}{extra}")
+        # Log usage
+        import usage
+        try: usage.log(update.effective_chat.id, users.get(update.effective_chat.id) or "", "absen", kode)
+        except: pass
+        context.user_data.clear()
+        return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.effective_message.reply_text("Dibatalkan.")

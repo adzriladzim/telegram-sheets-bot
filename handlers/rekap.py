@@ -500,55 +500,57 @@ async def _confirm(message: Message, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
-    if q.data.endswith(":no"):
-        await q.message.reply_text("Dibatalkan. Kirim /rekap untuk coba lagi.")
-        return ConversationHandler.END
-    c = context.user_data["cls"]
-    tanggal = _tanggal_kelas(context, c)
-    o, p, qf, r, s = context.user_data.get("counts", ("", "", "", "", ""))
-    rec = _build_base(context, c, tanggal)
-    rec.total, rec.hadir, rec.feedback, rec.tidak, rec.belum = o, p, qf, r, s
-    tab = context.user_data.get("rekap_tab", "")
-    fix_row = context.user_data.get("fix_row")
-    busy = await q.message.reply_text("⏳ Menyimpan ke Rekap...")
-    try:
-        if fix_row:
-            cells = {"O": o, "P": p, "Q": qf, "R": r, "S": s}
-            if rec.bukti.startswith("http"):
-                if rec.bukti_name:
-                    url = rec.bukti.replace('"', "")
-                    cells["L"] = f'=HYPERLINK("{url}","{rec.bukti_name.replace(chr(34), "")}")'
-                else:
-                    cells["L"] = rec.bukti
-            # Only fill empties for B-K to avoid clobbering manual edits
-            try:
-                cur = await _sheets(context).rekap_row_values(tab, fix_row)
-                cols = ["B", "C", "D", "E", "F", "G", "H", "I", "J", "K"]
-                vals = [rec.tanggal, rec.lecturer, rec.jam, rec.kode, rec.subject,
-                        rec.sks, rec.pertemuan, rec.tipe, rec.sesi, rec.peran]
-                for col, v in zip(cols, vals):
-                    idx = ord(col) - 65
-                    if v and (len(cur) <= idx or not cur[idx].strip()):
-                        cells[col] = v
-            except Exception:
-                pass
-            cells = {k: v for k, v in cells.items() if v}
-            await _sheets(context).update_rekap_cells(tab, fix_row, cells)
-        else:
-            await _sheets(context).append_rekap_record(tab, rec)
-    except sheets.SheetsError as exc:
+    # Per-chat lock (see handlers/log.py confirm_cb).
+    async with _sheets(context).for_chat(update.effective_chat.id):
+        if q.data.endswith(":no"):
+            await q.message.reply_text("Dibatalkan. Kirim /rekap untuk coba lagi.")
+            return ConversationHandler.END
+        c = context.user_data["cls"]
+        tanggal = _tanggal_kelas(context, c)
+        o, p, qf, r, s = context.user_data.get("counts", ("", "", "", "", ""))
+        rec = _build_base(context, c, tanggal)
+        rec.total, rec.hadir, rec.feedback, rec.tidak, rec.belum = o, p, qf, r, s
+        tab = context.user_data.get("rekap_tab", "")
+        fix_row = context.user_data.get("fix_row")
+        busy = await q.message.reply_text("⏳ Menyimpan ke Rekap...")
+        try:
+            if fix_row:
+                cells = {"O": o, "P": p, "Q": qf, "R": r, "S": s}
+                if rec.bukti.startswith("http"):
+                    if rec.bukti_name:
+                        url = rec.bukti.replace('"', "")
+                        cells["L"] = f'=HYPERLINK("{url}","{rec.bukti_name.replace(chr(34), "")}")'
+                    else:
+                        cells["L"] = rec.bukti
+                # Only fill empties for B-K to avoid clobbering manual edits
+                try:
+                    cur = await _sheets(context).rekap_row_values(tab, fix_row)
+                    cols = ["B", "C", "D", "E", "F", "G", "H", "I", "J", "K"]
+                    vals = [rec.tanggal, rec.lecturer, rec.jam, rec.kode, rec.subject,
+                            rec.sks, rec.pertemuan, rec.tipe, rec.sesi, rec.peran]
+                    for col, v in zip(cols, vals):
+                        idx = ord(col) - 65
+                        if v and (len(cur) <= idx or not cur[idx].strip()):
+                            cells[col] = v
+                except Exception:
+                    pass
+                cells = {k: v for k, v in cells.items() if v}
+                await _sheets(context).update_rekap_cells(tab, fix_row, cells)
+            else:
+                await _sheets(context).append_rekap_record(tab, rec)
+        except sheets.SheetsError as exc:
+            try: await busy.delete()
+            except Exception: pass
+            await q.message.reply_text(f"⚠️ Gagal simpan: {exc}\nTekan ✅ untuk retry.")
+            return CONFIRM
         try: await busy.delete()
         except Exception: pass
-        await q.message.reply_text(f"⚠️ Gagal simpan: {exc}\nTekan ✅ untuk retry.")
-        return CONFIRM
-    try: await busy.delete()
-    except Exception: pass
-    log.info("Saved rekap: %s %s", rec.kode, rec.pertemuan)
-    usage.log(update.effective_chat.id, rec.facilitator, "rekap", rec.kode)
-    done_msg = f" (update baris {fix_row})" if fix_row else ""
-    await q.message.reply_text(f"✅ Rekap tercatat di tab {tab}! {rec.kode} — pertemuan {rec.pertemuan}{done_msg}.\nKirim /rekap untuk entry berikutnya.")
-    context.user_data.clear()
-    return ConversationHandler.END
+        log.info("Saved rekap: %s %s", rec.kode, rec.pertemuan)
+        usage.log(update.effective_chat.id, rec.facilitator, "rekap", rec.kode)
+        done_msg = f" (update baris {fix_row})" if fix_row else ""
+        await q.message.reply_text(f"✅ Rekap tercatat di tab {tab}! {rec.kode} — pertemuan {rec.pertemuan}{done_msg}.\nKirim /rekap untuk entry berikutnya.")
+        context.user_data.clear()
+        return ConversationHandler.END
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

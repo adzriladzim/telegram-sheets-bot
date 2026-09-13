@@ -8,7 +8,7 @@ import logging
 import sys
 
 from telegram import BotCommand
-from telegram.ext import Application
+from telegram.ext import Application, ContextTypes
 
 import config
 import sheets
@@ -29,6 +29,11 @@ def _setup_logging() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)  # one line per API call otherwise
 
 
+async def _sheets_warm_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Periodic cache flush (re-seed): keep master/zoom/backup rows fresh."""
+    await context.bot_data["sheets"].warmup()
+
+
 async def _post_init(app: Application) -> None:
     await app.bot.set_my_commands(
         [
@@ -44,6 +49,10 @@ async def _post_init(app: Application) -> None:
             BotCommand("help", "Bantuan"),
         ]
     )
+    # Seed whole-sheet caches at boot + periodic refresh (see sheets.py warmup).
+    await app.bot_data["sheets"].warmup()
+    if app.job_queue is not None:
+        app.job_queue.run_repeating(_sheets_warm_job, interval=1800, first=1800, name="sheets:warm")
     await reminder.restore_jobs(app)
     await heartbeat.restore_jobs(app)
     logging.getLogger(__name__).info("Bot ready.")
@@ -67,7 +76,10 @@ def main() -> None:
         .post_init(_post_init)
         .connect_timeout(10)
         .read_timeout(20)
-        .concurrent_updates(False)  # required for reliable ConversationHandler
+        # Scale-out: process updates from different chats concurrently. Same-chat
+        # gspread-write handlers are serialized per-chat (sheets.SheetsClient.for_chat)
+        # so ConversationHandler stays reliable + no double-write on rapid taps.
+        .concurrent_updates(True)
         .build()
     )
     app.bot_data["cfg"] = cfg
