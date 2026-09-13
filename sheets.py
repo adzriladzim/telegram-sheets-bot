@@ -873,6 +873,13 @@ class SheetsClient:
     async def rekap_row_status(self, tab: str, kode: str, tanggal_list: list) -> dict:
         return await self._run(partial(self._rekap_row_status, tab, kode, tanggal_list))
 
+    def _rekap_row_values(self, tab: str, row_idx: int) -> list[str]:
+        ws = self._rekap_ss().worksheet(tab)
+        return ws.row_values(row_idx)
+
+    async def rekap_row_values(self, tab: str, row_idx: int) -> list[str]:
+        return await self._run(partial(self._rekap_row_values, tab, row_idx))
+
     def _update_rekap_cells(self, tab: str, row_idx: int, cells: dict) -> None:
         ws = self._rekap_ss().worksheet(tab)
         for col, val in cells.items():
@@ -916,6 +923,12 @@ class SheetsClient:
         res = await self._run(partial(self._get_rekap_status, facilitator_name))
         _rekap_status_cache[key] = (_t.time(), res)
         return res
+
+    def _sheet_rows(self, title: str) -> list[list[str]]:
+        return self._sheet(title).get_all_values()
+
+    async def sheet_rows(self, title: str) -> list[list[str]]:
+        return await self._run(partial(self._sheet_rows, title))
 
     @staticmethod
     def _norm_dosen(name: str) -> list[str]:

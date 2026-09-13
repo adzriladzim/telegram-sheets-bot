@@ -65,6 +65,8 @@ def main() -> None:
         Application.builder()
         .token(cfg.bot_token)
         .post_init(_post_init)
+        .connect_timeout(10)
+        .read_timeout(20)
         .concurrent_updates(False)  # required for reliable ConversationHandler
         .build()
     )

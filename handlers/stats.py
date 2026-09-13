@@ -66,8 +66,7 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         L += ["", f"<b>Belum pernah pakai ({len(inactive)})</b>"]
         L.append("• " + ", ".join(sorted(inactive)[:10]) + (" ..." if len(inactive) > 10 else ""))
     try:
-        ws = context.bot_data["sheets"]._sheet(context.bot_data["cfg"].zoom_record_sheet)
-        rows = ws.get_all_values()
+        rows = await context.bot_data["sheets"].sheet_rows(context.bot_data["cfg"].zoom_record_sheet)
         c = Counter(r[2].strip() for r in rows[1:] if len(r) > 2 and r[2].strip())
         if c:
             L += ["", f"<b>Sheet Zoom Record</b> — {sum(c.values())} baris"]

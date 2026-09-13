@@ -192,8 +192,7 @@ async def fix_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     tab = context.user_data.get("rekap_tab", "")
     row_idx = context.user_data.get("fix_row")
     try:
-        ws = _sheets(context)._rekap_ss().worksheet(tab)
-        vals = ws.row_values(row_idx)
+        vals = await _sheets(context).rekap_row_values(tab, row_idx)
     except Exception:
         return await _begin_meeting(q.message, context)
     def cell(i):
@@ -523,8 +522,7 @@ async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                     cells["L"] = rec.bukti
             # Only fill empties for B-K to avoid clobbering manual edits
             try:
-                ws = _sheets(context)._rekap_ss().worksheet(tab)
-                cur = ws.row_values(fix_row)
+                cur = await _sheets(context).rekap_row_values(tab, fix_row)
                 cols = ["B", "C", "D", "E", "F", "G", "H", "I", "J", "K"]
                 vals = [rec.tanggal, rec.lecturer, rec.jam, rec.kode, rec.subject,
                         rec.sks, rec.pertemuan, rec.tipe, rec.sesi, rec.peran]
