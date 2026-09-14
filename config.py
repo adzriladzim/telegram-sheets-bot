@@ -83,6 +83,8 @@ def load_config() -> Config:
     cfg = Config(
         bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
         sheet_id=os.getenv("GOOGLE_SHEET_ID", "1Y5wFTBj_04tkpCd0r0ySGwgNDBO7hQNGdwJKwJM5DIM").strip(),
+        # Sheet-id defaults = Batch 5 Ganjil 26/27 (fungsional, bukan secret).
+        # Env override dari .env/Railway; isi nyata user ada di .env, bukan di sini.
         service_account_json=_service_account_path(),
         # Optional: legacy single-user default. Per-user names live in data/users.json (/register).
         facilitator_name=os.getenv("FACILITATOR_NAME", "").strip(),

@@ -72,8 +72,8 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             L += ["", f"<b>Sheet Zoom Record</b> — {sum(c.values())} baris"]
             for n, cnt in c.most_common(5):
                 L.append(f"• {n}: {cnt}")
-    except Exception as e:
-        L.append(f"\n⚠️ Sheet gagal dibaca: {e}")
+    except Exception:
+        L.append("\n⚠️ Sheet gagal dibaca (sementara).")
     try:
         await busy.delete()
     except Exception:

@@ -23,7 +23,8 @@ from config import Config
 log = logging.getLogger(__name__)
 
 _absen_kodes_cache: dict = {"data": None, "ts": 0}
-_absen_students_cache: dict = {}
+_absen_students_cache: dict = {}  # kode -> (ts, [(nim, nama)]); TTL see _ABSEN_STUDENTS_TTL
+_ABSEN_STUDENTS_TTL = 300
 _classes_cache: dict = {}
 _rekap_status_cache: dict = {}
 _rekap_tab_cache: dict = {}
@@ -448,7 +449,8 @@ class SheetsClient:
                     for k, v in aliases.items():
                         if self._normalize(k) == key:
                             return [v]
-        except: pass
+        except Exception as exc:
+            log.warning("alias lookup failed: %s", exc)
         rows = self._cached_rows(self.cfg.sheet_id, self.cfg.master_sheet)
         target = self._normalize(search)
         found = set()
@@ -467,7 +469,9 @@ class SheetsClient:
         """Return (last_meeting_str, next_single, next_double). Scans Zoom Record col F=Kode, H=Pertemuan."""
         try:
             rows = self._cached_rows(self.cfg.sheet_id, self.cfg.zoom_record_sheet)
-        except: return ("", "1", "1 dan 2")
+        except Exception as exc:
+            log.warning("next-meeting scan failed: %s", exc)
+            return ("", "1", "1 dan 2")
         import re
         max_n = 0
         last_str = ""
@@ -493,7 +497,9 @@ class SheetsClient:
         """Set of kode already in Zoom Record for facilitator (any pertemuan) — for backward compat."""
         try:
             rows = self._cached_rows(self.cfg.sheet_id, self.cfg.zoom_record_sheet)
-        except: return set()
+        except Exception as exc:
+            log.warning("done-map scan failed: %s", exc)
+            return set()
         target = self._normalize(facilitator_name)
         done = set()
         for r in rows[1:]:
@@ -527,7 +533,9 @@ class SheetsClient:
         """Set of (kode, tanggal_kelas) already in Zoom Record — for daily check (gabung: 1 entry cover 2 sesi)."""
         try:
             rows = self._cached_rows(self.cfg.sheet_id, self.cfg.zoom_record_sheet)
-        except: return set()
+        except Exception as exc:
+            log.warning("done-by-date scan failed: %s", exc)
+            return set()
         target = self._normalize(facilitator_name)
         done = set()
         for r in rows[1:]:
@@ -576,8 +584,9 @@ class SheetsClient:
 
     def _list_students(self, kode: str) -> list[tuple[str, str]]:
         key = kode.casefold()
-        if key in _absen_students_cache and _absen_students_cache[key]:
-            return _absen_students_cache[key]
+        hit = _absen_students_cache.get(key)
+        if hit and time.time() - hit[0] < _ABSEN_STUDENTS_TTL:
+            return hit[1]
         for rows in self._all_absen_rows().values():
             for i, r in enumerate(rows):
                 if r[0].strip() == "Kode Kelas" and len(r) > 1 and r[1].strip().casefold() == key:
@@ -596,10 +605,18 @@ class SheetsClient:
                         nama = rows[r_idx][1].strip() if len(rows[r_idx])>1 else ""
                         if nim or nama:
                             out.append((nim, nama or "-"))
-                    _absen_students_cache[key] = out
+                    _absen_students_cache[key] = (time.time(), out)
                     return out
-        _absen_students_cache[key] = []
+        _absen_students_cache[key] = (time.time(), [])
         return []
+
+    def _invalidate_absen_students(self, kode: str | None = None) -> None:
+        """Dropped on absen writes so edits (roster / status) re-fetch. Empty result
+        exposed via TTL only — never cached permanently."""
+        if kode is None:
+            _absen_students_cache.clear()
+        else:
+            _absen_students_cache.pop(kode.casefold(), None)
 
     async def list_students(self, kode: str) -> list[tuple[str, str]]:
         return await self._run(partial(self._list_students, kode))
@@ -698,6 +715,7 @@ class SheetsClient:
             self._ss(self.cfg.absen_sheet_id).values_batch_update(
                 {"valueInputOption": "USER_ENTERED", "data": data})
             self._invalidate_rows(self.cfg.absen_sheet_id, title)
+        self._invalidate_absen_students(kode)
         log.info("Updated absen %s pertemuan %d status %s: %d rows in sheet %s", kode, pertemuan, status, updated, title)
         if updated == 0 and not res["ambiguous"] and not res["unmatched"]:
             raise SheetsError("Tidak ada NIM/Nama yang cocok")
@@ -743,7 +761,8 @@ class SheetsClient:
                         sems = sorted(set(re.findall(r"\b(\d+)\b", rombel_tmp)))
                         semester = " & ".join(sems) if sems else ""
                         break
-            except: pass
+            except Exception as exc:
+                log.warning("backup master lookup failed: %s", exc)
             out.append(ClassEntry(
                 code=kode,
                 subject=row[5].strip() if len(row) > 5 else "",
@@ -1136,7 +1155,13 @@ class SheetsClient:
         loop = asyncio.get_running_loop()
         async with self._lock:  # serialize to dodge quota races
             try:
-                return await loop.run_in_executor(None, fn)
+                # 60s wall-clock cap. On timeout the lock is released (async with
+                # unwinds) — the executor thread keeps running but is orphaned, so
+                # no deadlock and no blocked event loop.
+                return await asyncio.wait_for(loop.run_in_executor(None, fn), timeout=60)
+            except asyncio.TimeoutError as exc:
+                log.exception("sheets call timed out")
+                raise SheetsError("Google Sheets timeout (60 detik) — coba lagi.") from exc
             except SheetsError:
                 raise
             except gspread.exceptions.GSpreadException as exc:
@@ -1144,7 +1169,10 @@ class SheetsClient:
                 raise SheetsError(f"Gagal mengakses Google Sheets: {exc}") from exc
             except OSError as exc:
                 log.exception("file/network failure")
-                raise SheetsError(f"Gagal membaca kredensial/jaringan: {exc}") from exc
+                raise SheetsError("Gagal membaca kredensial/jaringan. Pastikan berkas kredensial tersedia.") from exc
+            except Exception as exc:
+                log.exception("unexpected sheets failure")
+                raise SheetsError("Terjadi kesalahan saat mengakses Google Sheets. Coba lagi.") from exc
 
 
 def this_week_classes(classes: list[ClassEntry]) -> dict[str, list[ClassEntry]]:

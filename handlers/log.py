@@ -165,7 +165,7 @@ async def pick_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     wait = await q.message.reply_text("⏳ Cari pertemuan terakhir...")
     try:
         last, nxt, nxt2 = await _sheets(context).get_next_meeting(c.code)
-    except:
+    except Exception:
         last, nxt, nxt2 = "", "1", "1 dan 2"
     try: await wait.delete()
     except: pass
