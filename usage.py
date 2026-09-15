@@ -34,7 +34,11 @@ def log(chat_id: int, name: str, action: str, kode: str, **extra):
         # Existing callers pass 4 args; action-specific extras only when provided.
         entry.update({k: v for k, v in extra.items() if v is not None and v != ""})
         data.append(entry)
-        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as exc:
+            # Fail-open: usage tracking must never break the main flow (/zoom etc.).
+            _log.warning("usage.json write failed: %s", exc)
 
 def stats():
     p = _path()

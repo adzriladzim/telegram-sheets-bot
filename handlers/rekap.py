@@ -552,7 +552,11 @@ async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         except sheets.SheetsError as exc:
             try: await busy.delete()
             except Exception: pass
-            await q.message.reply_text(f"⚠️ Gagal simpan: {exc}\nTekan ✅ untuk retry.")
+            retry_kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Retry", callback_data="rkx:ok"),
+                 InlineKeyboardButton("❌ Batal", callback_data="rkx:no")],
+            ])
+            await q.message.reply_text(f"⚠️ Gagal simpan: {exc}\nData belum tersimpan.", reply_markup=retry_kb)
             return CONFIRM
         try: await busy.delete()
         except Exception: pass

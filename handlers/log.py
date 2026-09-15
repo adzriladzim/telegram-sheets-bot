@@ -364,7 +364,11 @@ async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 await q.message.reply_text(f"⚠️ Gagal 3x: {exc}\nData tidak tersimpan. Kirim /log untuk mulai ulang.")
                 context.user_data.clear()
                 return ConversationHandler.END
-            await q.message.reply_text(f"⚠️ Gagal simpan ({retries}/3): {exc}\nTekan ✅ untuk retry, atau /cancel untuk batal.")
+            retry_kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Retry", callback_data="x:ok"),
+                 InlineKeyboardButton("❌ Batal", callback_data="x:no")],
+            ])
+            await q.message.reply_text(f"⚠️ Gagal simpan ({retries}/3): {exc}\nData belum tersimpan.", reply_markup=retry_kb)
             return CONFIRM
         try: await busy.delete()
         except Exception: pass

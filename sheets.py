@@ -22,6 +22,11 @@ from config import Config
 
 log = logging.getLogger(__name__)
 
+
+def _q(title: str) -> str:
+    """Quote a tab title for A1 ranges, escaping apostrophes (' -> '')."""
+    return "'%s'" % title.replace("'", "''")
+
 _absen_kodes_cache: dict = {"data": None, "ts": 0}
 _absen_students_cache: dict = {}  # kode -> (ts, [(nim, nama)]); TTL see _ABSEN_STUDENTS_TTL
 _ABSEN_STUDENTS_TTL = 300
@@ -355,10 +360,11 @@ class SheetsClient:
 
     def _guard_grid(self, ws: gspread.Worksheet, col_letters: list[str], row: int) -> None:
         """Reject write targets outside the worksheet grid with a clear error.
-        row_count/col_count are final grid bounds — a past-the-end row means the
-        tab is full or we resolved the wrong tab."""
+        Rows: allow up to 1024 past the final grid bound — Sheets auto-expands
+        on write, and a full tab must not hard-fail saves. Columns stay strict:
+        an over-wide target means we resolved the wrong tab."""
         max_col = max(self._col_num(c) for c in col_letters) if col_letters else 0
-        if row > ws.row_count:
+        if row > ws.row_count + 1024:
             raise SheetsError(
                 f"Target baris {row} melebihi batas sheet '{ws.title}' "
                 f"({ws.row_count} baris) — tab penuh atau tab salah. Hubungi admin.")
@@ -440,7 +446,7 @@ class SheetsClient:
         # "B5" can never land on the spreadsheet's first sheet. gspread's
         # Worksheet has no values_batch_update (6.2.1) — same qualified pattern
         # as _update_absen.
-        data = [{"range": f"'{ws.title}'!{col}{insert_row}", "values": [[row_data[idx]]]}
+        data = [{"range": f"{_q(ws.title)}!{col}{insert_row}", "values": [[row_data[idx]]]}
                 for idx, col in unprotected_map.items()]
         ss.values_batch_update({"valueInputOption": "USER_ENTERED", "data": data})
         self._invalidate_rows(self.cfg.sheet_id, self.cfg.zoom_record_sheet)
@@ -588,7 +594,7 @@ class SheetsClient:
                 if not _rows_cache.get((self.cfg.absen_sheet_id, t))
                 or now - _rows_cache[(self.cfg.absen_sheet_id, t)][0] >= _ROWS_TTL]
         if need:
-            resp = self._ss(self.cfg.absen_sheet_id).values_batch_get([f"'{t}'" for t in need])
+            resp = self._ss(self.cfg.absen_sheet_id).values_batch_get([_q(t) for t in need])
             for t, vr in zip(need, resp.get("valueRanges", []) or []):
                 _rows_cache[(self.cfg.absen_sheet_id, t)] = (now, vr.get("values", []) or [])
         return {t: _rows_cache[(self.cfg.absen_sheet_id, t)][1] for t in titles}
@@ -759,7 +765,7 @@ class SheetsClient:
         data = []
         written_titles = set()
         for r_idx, nim, nama, mode, title in res["matched"]:
-            data.append({"range": f"'{title}'!{col_letter}{r_idx+1}", "values": [[status]]})
+            data.append({"range": f"{_q(title)}!{col_letter}{r_idx+1}", "values": [[status]]})
             written_titles.add(title)
             updated += 1
         if data:
@@ -1000,7 +1006,7 @@ class SheetsClient:
         if not cells:
             return
         ws = self._sheet_in(self.cfg.rekap_sheet_id, tab)
-        data = [{"range": f"'{ws.title}'!{col}{row_idx}", "values": [[val]]}
+        data = [{"range": f"{_q(ws.title)}!{col}{row_idx}", "values": [[val]]}
                 for col, val in cells.items() if val != ""]
         if data:
             self._guard_grid(ws, [col for col, val in cells.items() if val != ""], row_idx)
