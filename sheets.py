@@ -278,22 +278,6 @@ def last_date_for_day(day_name: str) -> str:
     return (today - timedelta(days=delta)).strftime("%d/%m/%Y")
 
 
-def _mode_incompatible(mode: str, status: str) -> bool:
-    """Warn when an absen status contradicts the student's col-C Mode Kelas Asal
-    (e.g. Online marked as on-site 'S'). Soft check — never blocks the write."""
-    m = (mode or "").strip().casefold()
-    s = (status or "").strip().upper()
-    online = "online" in m
-    onsite = any(k in m for k in ("onsite", "offline", "tatap", "ceramah"))
-    if not (online or onsite):
-        return False
-    if online and not onsite and s in ("S", "SF"):
-        return True
-    if onsite and not online and s in ("O", "OF"):
-        return True
-    return False
-
-
 class SheetsClient:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
@@ -745,13 +729,10 @@ class SheetsClient:
         updated = 0
         data = []
         written_titles = set()
-        warnings = []
         for r_idx, nim, nama, mode, title in res["matched"]:
             data.append({"range": f"'{title}'!{col_letter}{r_idx+1}", "values": [[status]]})
             written_titles.add(title)
             updated += 1
-            if mode and _mode_incompatible(mode, status):
-                warnings.append(f"{nim or nama} ({mode})")
         if data:
             self._ss(self.cfg.absen_sheet_id).values_batch_update(
                 {"valueInputOption": "USER_ENTERED", "data": data})
@@ -766,8 +747,7 @@ class SheetsClient:
                 "unmatched": res["unmatched"],
                 "names": [nm for _, _, nm, _, _ in res["matched"][:10]],
                 "sheets": sorted(written_titles),
-                "sheet": res["title"],
-                "warnings": warnings}
+                "sheet": res["title"]}
 
     async def update_absen(self, kode: str, pertemuan: int, identifiers: list[str], status: str) -> dict:
         return await self._run(partial(self._update_absen, kode, pertemuan, identifiers, status))

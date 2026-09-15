@@ -386,8 +386,6 @@ async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             extra += f"\n⚠️ Ambigu (pakai NIM penuh): {amb}"
         if res["unmatched"]:
             extra += f"\n❌ Tak ketemu: {', '.join(res['unmatched'][:5])}"
-        if res.get("warnings"):
-            extra += f"\n⚠️ Mode tak cocok: {', '.join(res['warnings'][:5])}"
         await q.message.reply_text(f"✅ Absen tercatat: {kode} pertemuan {per} → {n} mahasiswa status {status}{extra}")
         # Log usage
         import usage
