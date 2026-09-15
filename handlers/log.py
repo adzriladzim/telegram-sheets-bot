@@ -55,11 +55,11 @@ async def cmd_log(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         personal, backup = await _sheets(context).get_all_loggable_classes(facilitator)
     except sheets.SheetsError as exc:
         try: await loading.delete()
-        except: pass
+        except Exception: pass
         await update.effective_message.reply_text(f"⚠️ {exc}")
         return ConversationHandler.END
     try: await loading.delete()
-    except: pass
+    except Exception: pass
     classes = personal + backup
     if not classes:
         await update.effective_message.reply_text(f"Tidak ada kelas untuk {facilitator} (jadwal + backup kosong).")
@@ -68,14 +68,14 @@ async def cmd_log(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # Check which classes have been filled for their last scheduled date + jam
     try:
         done_by_date = await _sheets(context).get_done_by_date(facilitator)
-    except: done_by_date = set()
+    except Exception: done_by_date = set()
     kb_rows = []
     for i, c in enumerate(classes):
         last_date = sheets.last_date_for_day(c.day) if c.category != "Backup" else c.backup_hari_tanggal.split(",")[-1].strip() if "," in c.backup_hari_tanggal else c.backup_hari_tanggal
         if c.category == "Backup" and c.backup_hari_tanggal:
             try:
                 last_date = _parse_backup_date(c.backup_hari_tanggal)
-            except: pass
+            except Exception: pass
         is_done = (c.code.casefold(), last_date) in done_by_date
         prefix = "✅ " if is_done else ""
         if c.category == "Backup":
@@ -157,7 +157,10 @@ async def pick_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
     idx = int(q.data.split(":")[1])
-    classes: list[sheets.ClassEntry] = context.user_data["classes"]
+    classes: list[sheets.ClassEntry] = context.user_data.get("classes") or []
+    if not 0 <= idx < len(classes):
+        await q.message.reply_text("Pilihan kedaluwarsa — kirim /log lagi.")
+        return ConversationHandler.END
     c = classes[idx]
     context.user_data["cls"] = c
     await q.message.edit_text(f"Kelas: <b>{c.code}</b> — {c.subject}\n\n", parse_mode=ParseMode.HTML)
@@ -168,7 +171,7 @@ async def pick_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     except Exception:
         last, nxt, nxt2 = "", "1", "1 dan 2"
     try: await wait.delete()
-    except: pass
+    except Exception: pass
     context.user_data["suggest"] = (last, nxt, nxt2)
     context.user_data["meeting"] = nxt  # auto-sync dari Zoom Record, tanpa tanya
     kb = InlineKeyboardMarkup([
@@ -356,7 +359,7 @@ async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             retries += 1
             context.user_data["_retries"] = retries
             try: await busy.delete()
-            except: pass
+            except Exception: pass
             if retries >= 3:
                 await q.message.reply_text(f"⚠️ Gagal 3x: {exc}\nData tidak tersimpan. Kirim /log untuk mulai ulang.")
                 context.user_data.clear()
@@ -364,7 +367,7 @@ async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             await q.message.reply_text(f"⚠️ Gagal simpan ({retries}/3): {exc}\nTekan ✅ untuk retry, atau /cancel untuk batal.")
             return CONFIRM
         try: await busy.delete()
-        except: pass
+        except Exception: pass
         log.info("Saved record: %s mtg %s scheme %s", rec.code, rec.meeting, rec.scheme)
         usage.log(update.effective_chat.id, rec.facilitator, "zoom", rec.code)
         await q.message.reply_text(f"✅ Tercatat di sheet! {rec.code} — pertemuan {rec.meeting} ({rec.scheme}).\nKirim /log untuk entry berikutnya.")

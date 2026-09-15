@@ -36,11 +36,11 @@ async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         classes = await _sheets(context).get_classes(name)
     except sheets.SheetsError as e:
         try: await loading.delete()
-        except: pass
+        except Exception: pass
         await update.effective_message.reply_text(f"⚠️ {e}")
         return ConversationHandler.END
     try: await loading.delete()
-    except: pass
+    except Exception: pass
     if not classes:
         await update.effective_message.reply_text("Tidak ada kelas.")
         return ConversationHandler.END
@@ -103,7 +103,11 @@ async def back_bk_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def pick_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query; await q.answer()
     idx = int(q.data.split(":")[1])
-    c = context.user_data["bk_classes"][idx]
+    classes = context.user_data.get("bk_classes") or []
+    if not 0 <= idx < len(classes):
+        await q.message.reply_text("Pilihan kedaluwarsa — kirim /backup lagi.")
+        return ConversationHandler.END
+    c = classes[idx]
     context.user_data["bk_cls"] = c
     await q.message.edit_text(f"Kelas: <b>{c.code}</b> — {c.subject}", parse_mode=ParseMode.HTML)
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Kembali", callback_data="bk:back_class")]])
@@ -167,10 +171,6 @@ async def skip_catatan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 async def skip_catatan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["bk_catatan"] = ""
     return await _confirm(update.message, context)
-
-def update_chat_id(ctx):
-    try: return ctx.effective_chat.id
-    except: return 0
 
 def _summary(r):
     return f"📋 <b>Konfirmasi Backup:</b>\n• Fasil Awal: {r.facilitator_awal}\n• Hari/Tgl: {r.hari_tanggal}\n• Jam: {r.jam}\n• Kelas: {r.kode} — {r.subject}\n• Dosen: {r.lecturer}\n• Ruang: {r.room}\n• Pengganti: {r.pengganti}\n• Catatan: {r.catatan or '—'}\n\nSubmit?"

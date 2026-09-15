@@ -91,7 +91,11 @@ async def back_cc_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def pick_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query; await q.answer()
     idx = int(q.data.split(":")[1])
-    c = context.user_data["cc_classes"][idx]
+    classes = context.user_data.get("cc_classes") or []
+    if not 0 <= idx < len(classes):
+        await q.message.reply_text("Pilihan kedaluwarsa — kirim /cancel lagi.")
+        return ConversationHandler.END
+    c = classes[idx]
     context.user_data["cc_cls"] = c
     await q.message.edit_text(f"Kelas: <b>{c.code}</b> — {c.subject}", parse_mode=ParseMode.HTML)
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Kembali", callback_data="cc:back_class")]])

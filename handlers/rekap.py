@@ -120,7 +120,11 @@ async def pick_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
     idx = int(q.data.split(":")[1])
-    c = context.user_data["classes"][idx]
+    classes = context.user_data.get("classes") or []
+    if not 0 <= idx < len(classes):
+        await q.message.reply_text("Pilihan kedaluwarsa — kirim /rekap lagi.")
+        return ConversationHandler.END
+    c = classes[idx]
     context.user_data["cls"] = c
     await q.message.edit_text(f"Kelas: <b>{c.code}</b> — {c.subject}\n\n", parse_mode=ParseMode.HTML)
     # Cek baris rumpang/lengkap untuk tanggal ini — tawarkan lengkapi, jangan dobel
@@ -313,7 +317,11 @@ def _sesi_kb() -> InlineKeyboardMarkup:
 async def pick_sesi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
-    context.user_data["sesi"] = SESI_OPTS[int(q.data.split(":")[1])]
+    i = int(q.data.split(":")[1])
+    if not 0 <= i < len(SESI_OPTS):
+        await q.message.reply_text("4️⃣ Sesi kelas? (atau ketik manual)", reply_markup=_sesi_kb())
+        return SESI
+    context.user_data["sesi"] = SESI_OPTS[i]
     return await _ask_peran(q.message, context)
 
 
@@ -346,7 +354,10 @@ async def _ask_peran(msg, context) -> int:
 async def pick_peran(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
-    context.user_data["peran"] = PERAN_OPTS[int(q.data.split(":")[1])]
+    i = int(q.data.split(":")[1])
+    if not 0 <= i < len(PERAN_OPTS):
+        return await _ask_peran(q.message, context)
+    context.user_data["peran"] = PERAN_OPTS[i]
     return await _ask_bukti(q.message, context)
 
 
@@ -638,7 +649,7 @@ async def back_to_rk_sesi(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     q = update.callback_query
     await q.answer()
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Kelas Biasa", callback_data="rks:biasa")],
+        [InlineKeyboardButton("Kelas Biasa", callback_data="rks:0")],
         [InlineKeyboardButton("◀️ Kembali", callback_data="rkb:tipe")],
     ])
     await q.message.reply_text("4️⃣ Sesi kelas? (atau ketik manual)", reply_markup=kb)

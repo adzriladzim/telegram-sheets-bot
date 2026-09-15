@@ -34,11 +34,11 @@ async def cmd_absen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         my_kodes = {c.code for c in my_classes}
     except sheets.SheetsError as e:
         try: await loading.delete()
-        except: pass
+        except Exception: pass
         await update.effective_message.reply_text(f"⚠️ {e}")
         return ConversationHandler.END
     try: await loading.delete()
-    except: pass
+    except Exception: pass
     if not my_kodes:
         await update.effective_message.reply_text("Tidak ada kelas di Jadwal untuk absen.")
         return ConversationHandler.END
@@ -295,7 +295,10 @@ async def toggle_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             await q.message.edit_text(_checklist_text(context), reply_markup=kb)
         return CHECKLIST
     idx = int(data)
-    students = context.user_data["absen_students"]
+    students = context.user_data.get("absen_students") or []
+    if not 0 <= idx < len(students):
+        await q.message.reply_text("Pilihan kedaluwarsa — kirim /absen lagi.")
+        return ConversationHandler.END
     nim = students[idx][0]
     sel = context.user_data["absen_selected"]
     if nim in sel: sel.remove(nim)
@@ -305,7 +308,7 @@ async def toggle_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     try:
         await q.message.edit_reply_markup(reply_markup=kb)
         await q.message.edit_text(_checklist_text(context), reply_markup=kb)
-    except:
+    except Exception:
         # Fallback if edit fails
         await q.message.edit_text(_checklist_text(context), reply_markup=kb)
     return CHECKLIST
@@ -374,11 +377,11 @@ async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             res = await _sheets(context).update_absen(kode, per, ids, status)
         except sheets.SheetsError as e:
             try: await busy.delete()
-            except: pass
+            except Exception: pass
             await q.message.reply_text(f"⚠️ Gagal: {e}")
             return CONFIRM
         try: await busy.delete()
-        except: pass
+        except Exception: pass
         n = res["updated"]
         extra = ""
         if res["ambiguous"]:
@@ -391,7 +394,7 @@ async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         import usage
         try: usage.log(update.effective_chat.id, users.get(update.effective_chat.id) or "", "absen", kode,
                        pertemuan=per, status=status, jumlah=len(ids))
-        except: pass
+        except Exception: pass
         context.user_data.clear()
         return ConversationHandler.END
 

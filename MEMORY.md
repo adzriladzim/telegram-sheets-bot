@@ -106,4 +106,23 @@ Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, 
 - **Isi:** fix `IndexError` di read path absen `sheets.py` — **6 guard** utk baris kosong/pendek (baris sheet kosong tak lagi index out of range). Tidak menyentuh logic dedup/multi-blok/write path.
 - **Efek:** `/absen` checklist normal lagi.
 - **NEXT (user):** cek Railway deploy ACTIVE + tes `/absen` checklist di @telefasil_bot.
-- **Peringatan tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 conflict); verify byte-level utk non-ASCII. Attach gambar → STOP, delegate vision agent.
+## [2026-09-15] Verifikasi offline HEAD 725423d (no creds, no deploy) — PASS
+> Commit `725423d` (worksheet-scoped batch writes + grid guards + _SYSTEM_TABS). Verifikasi tanpa creds live:
+- **compileall** OK (py 3.12.10, `py -m compileall -q .`).
+- **Import 19 modul** OK — config, sheets, users, usage, bot, dan seluruh handlers/* (deps ada: gspread 6.2.1).
+- **Stub test `verify_725423d.py` (baru)** — gspread full-stub (FakeClient/Spreadsheet/Worksheet), tanpa creds: **18/18 PASS**. Cek: write ranges semua qualified `'{Title}'!A1` (append_record 10 kolom, update_absen multi-blok, update_rekap_cells), empty rows tak IndexError (separator baris kosong), multi-blok agregat lintas tab (D5/D10/D4 correct), grid guard raise + full-tab append gagal bersih.
+- **Grep findings:**
+  - `values_batch_update` 3 call semua qualified range (L445 `_append_record`, L766 `_update_absen`, L1005 `_update_rekap_cells`) + `values_batch_get` L591 qualified. PASS.
+  - `[0]` tanpa guard: 0 — semua akses row-list guarded (`if r and ...`, ternary `len()>0`, `if len==1`, split[""] non-empty, `blocks if else`). PASS.
+  - bare `except:` 16 lokasi — SEMUA best-effort UI (hapus loading/busy msg, fallback edit, usage log); bukan path I/O kritis. WARN-only, konvensi `except Exception` belum dipakai di path ini.
+- No deploy. Working tree: +`verify_725423d.py` (test stub).
+
+## [2026-09-15] Review S3 — grid guard backup/cancel + callback idx bounds (725423d..)
+> **SHIPPED:** commit ini. Railway auto-deploy.
+- **Isi:**
+  - `sheets.py` `_append_backup_record` / `_append_cancel_record` kini panggil `_guard_grid` (`J` / `I`) sebelum `ws.update` — tab penuh/salah gagal bersih, bukan tulis di luar grid.
+  - Bounds check callback idx di: `log.pick_class`, `rekap.pick_class`/`pick_sesi`/`pick_peran`, `cancel.pick_class`, `backup.pick_class`, `absen.toggle_check` — OOB → pesan expired + END (sesi/peran → re-ask KB), tak ada IndexError.
+  - Fix bonus: `rekap.back_to_rk_sesi` tombol "Kelas Biasa" callback `rks:biasa` (tak match pattern `rks:\d+`, tombol mati) → `rks:0`.
+  - Optional: 16 bare `except:` → `except Exception` (best-effort UI path tetap), hapus dead code `update_chat_id` (backup.py).
+- **Verifikasi:** `py -m compileall -q .` OK. Stub lama `verify_725423d.py` 18/18 PASS (regresi bersih). Stub baru `verify_s3.py` 15/15 PASS (guard grid backup/cancel + 7 OOB handler checks via FakeUpdate/FakeCtx, tanpa creds).
+- No deploy. Working tree: +`verify_s3.py` (test stub, uncommitted seperti pola sblmnya).

@@ -858,6 +858,7 @@ class SheetsClient:
             if not has_data:
                 insert_row = i + 1
                 break
+        self._guard_grid(ws, ["J"], insert_row)
         ws.update(f"B{insert_row}:J{insert_row}", [row_data], value_input_option="USER_ENTERED")
         self._invalidate_rows(self.cfg.sheet_id, self.cfg.backup_sheet)
         log.info("Wrote backup %s/%s at row %d", rec.kode, rec.hari_tanggal, insert_row)
@@ -875,6 +876,7 @@ class SheetsClient:
             if not has_data:
                 insert_row = i + 1
                 break
+        self._guard_grid(ws, ["I"], insert_row)
         ws.update(f"B{insert_row}:I{insert_row}", [row_data], value_input_option="USER_ENTERED")
         self._invalidate_rows(self.cfg.sheet_id, self.cfg.cancel_sheet)
         log.info("Wrote cancel %s/%s at row %d", rec.kode, rec.sesi, insert_row)
