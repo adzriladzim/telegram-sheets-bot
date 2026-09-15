@@ -35,6 +35,8 @@ _feedback_cache: dict = {"rows": None, "ts": 0}
 _rows_cache: dict[tuple[str, str], tuple[float, list[list[str]]]] = {}
 _tabs_cache: dict[str, tuple[float, list[str]]] = {}
 _ROWS_TTL = 300
+# Worksheet titles in the Rekap spreadsheet that are NOT per-fasil tabs.
+_SYSTEM_TABS = ("PENTING DIBACA", "Template")
 SCHOOL_KEYWORDS = {
     "school of ai & computer science": ["computer science", "artificial intelligence", "informatics", "information system", "data science", "ai &"],
     "school of engineering": ["industrial engineering", "electrical engineering", "engineering"],
@@ -343,6 +345,28 @@ class SheetsClient:
     def _normalize(self, v: str) -> str:
         return re.sub(r"\s+", " ", (v or "").strip()).casefold()
 
+    @staticmethod
+    def _col_num(letter: str) -> int:
+        """'A' -> 1, 'B' -> 2, ... (1-based column index)."""
+        n = 0
+        for ch in letter.upper():
+            n = n * 26 + (ord(ch) - ord("A") + 1)
+        return n
+
+    def _guard_grid(self, ws: gspread.Worksheet, col_letters: list[str], row: int) -> None:
+        """Reject write targets outside the worksheet grid with a clear error.
+        row_count/col_count are final grid bounds — a past-the-end row means the
+        tab is full or we resolved the wrong tab."""
+        max_col = max(self._col_num(c) for c in col_letters) if col_letters else 0
+        if row > ws.row_count:
+            raise SheetsError(
+                f"Target baris {row} melebihi batas sheet '{ws.title}' "
+                f"({ws.row_count} baris) — tab penuh atau tab salah. Hubungi admin.")
+        if max_col > ws.col_count:
+            raise SheetsError(
+                f"Target kolom melebihi batas sheet '{ws.title}' "
+                f"({ws.col_count} kolom) — tab salah. Hubungi admin.")
+
     def _fetch_classes(self, facilitator_name: str) -> list[ClassEntry]:
         rows = self._cached_rows(self.cfg.sheet_id, self.cfg.master_sheet)
         target = self._normalize(facilitator_name)
@@ -411,7 +435,12 @@ class SheetsClient:
             0: "B", 1: "C", 2: "D", 3: "E", 4: "F",
             6: "H", 7: "I", 11: "M", 12: "N", 13: "O",
         }
-        data = [{"range": f"{col}{insert_row}", "values": [[row_data[idx]]]}
+        self._guard_grid(ws, list(unprotected_map.values()), insert_row)
+        # Worksheet-scoped: qualify every range with the tab title so a bare
+        # "B5" can never land on the spreadsheet's first sheet. gspread's
+        # Worksheet has no values_batch_update (6.2.1) — same qualified pattern
+        # as _update_absen.
+        data = [{"range": f"'{ws.title}'!{col}{insert_row}", "values": [[row_data[idx]]]}
                 for idx, col in unprotected_map.items()]
         ss.values_batch_update({"valueInputOption": "USER_ENTERED", "data": data})
         self._invalidate_rows(self.cfg.sheet_id, self.cfg.zoom_record_sheet)
@@ -854,12 +883,13 @@ class SheetsClient:
     def _find_rekap_tab(self, facilitator_name: str) -> str:
         """Match registered name to per-fasil tab (nickname titles). Longest match wins."""
         target = self._normalize(facilitator_name)
+        skip = {self._normalize(t) for t in _SYSTEM_TABS}
         best, best_len = None, 0
         for t in self._tabs(self.cfg.rekap_sheet_id):
             t = t.strip()
-            if t in ("PENTING DIBACA", "Template"):
-                continue
             tn = self._normalize(t)
+            if tn in skip:
+                continue
             if tn and tn in target and len(tn) > best_len:
                 best, best_len = t, len(tn)
         if not best:
@@ -883,6 +913,8 @@ class SheetsClient:
                 insert_row = i + 1
                 break
         no = str(insert_row - 1)
+        # Grid guard — "W" is the rightmost column we write (col 23).
+        self._guard_grid(ws, ["W"], insert_row)
         ws.update(f"A{insert_row}:W{insert_row}", [[no] + row_data], value_input_option="USER_ENTERED")
         self._invalidate_rows(self.cfg.rekap_sheet_id, tab)
         _rekap_status_cache.clear()
@@ -963,9 +995,14 @@ class SheetsClient:
         return await self._run(partial(self._rekap_row_values, tab, row_idx))
 
     def _update_rekap_cells(self, tab: str, row_idx: int, cells: dict) -> None:
-        data = [{"range": f"{col}{row_idx}", "values": [[val]]} for col, val in cells.items() if val != ""]
+        if not cells:
+            return
+        ws = self._sheet_in(self.cfg.rekap_sheet_id, tab)
+        data = [{"range": f"'{ws.title}'!{col}{row_idx}", "values": [[val]]}
+                for col, val in cells.items() if val != ""]
         if data:
-            self._ss(self.cfg.rekap_sheet_id).values_batch_update(
+            self._guard_grid(ws, [col for col, val in cells.items() if val != ""], row_idx)
+            ws.spreadsheet.values_batch_update(
                 {"valueInputOption": "USER_ENTERED", "data": data})
             self._invalidate_rows(self.cfg.rekap_sheet_id, tab)
         log.info("Updated rekap %s row %d cols %s", tab, row_idx, sorted(cells))
