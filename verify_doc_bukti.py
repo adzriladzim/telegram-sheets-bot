@@ -40,10 +40,12 @@ rec = sheets.RekapRecord(
 
 fn = rec.bukti_filename("jpg")
 check("format 4 segmen {tanggal}_{dosen}_{matkul}_{nama_fasil}.jpg",
-      bool(re.fullmatch(r"[^_]+_[^_]+_[^_]+_[^_]+\.(jpg|png)", fn)), fn)
+      bool(re.fullmatch(r"[^_]+_[^_]+_[^_]+_[^_]+\.(jpg|jpeg|png|webp)", fn)), fn)
 check("no illegal Drive chars", not ILLEGAL.search(fn), fn)
 check("ext jpg", fn.endswith(".jpg"), fn)
 check("png ext respected", rec.bukti_filename("png").endswith(".png"))
+check("jpeg ext respected", rec.bukti_filename("jpeg").endswith(".jpeg"))
+check("webp ext respected", rec.bukti_filename("webp").endswith(".webp"))
 check("ext sanitized (strips dot)", rec.bukti_filename(".jpeg").endswith(".jpeg"))
 
 fn2 = rec.bukti_filename("jpg")
@@ -62,11 +64,16 @@ def doc(mime, name=""):
     return SimpleNamespace(file_name=name, mime_type=mime)
 
 check("accept image/png", _doc_ext(doc("image/png", "a.png")) == "png")
-check("accept image/jpeg -> jpg", _doc_ext(doc("image/jpeg", "a.jpg")) == "jpg")
+check("accept image/jpeg name .jpg -> jpg", _doc_ext(doc("image/jpeg", "a.jpg")) == "jpg")
+check("accept image/jpeg name .jpeg -> jpeg", _doc_ext(doc("image/jpeg", "a.jpeg")) == "jpeg")
 check("accept image/webp", _doc_ext(doc("image/webp", "a.webp")) == "webp")
 check("reject application/pdf", _doc_ext(doc("application/pdf", "a.pdf")) is None)
 check("reject text/plain", _doc_ext(doc("text/plain", "a.txt")) is None)
+check("accept octet-stream but .jpeg name", _doc_ext(doc("application/octet-stream", "scan.jpeg")) == "jpeg")
+check("accept octet-stream but .png name", _doc_ext(doc("application/octet-stream", "scan.png")) == "png")
 check("accept no-mime but .png ext", _doc_ext(doc(None, "scan.png")) == "png")
+check("accept no-mime but .webp ext", _doc_ext(doc(None, "scan.webp")) == "webp")
+check("accept no-mime but .jpeg ext", _doc_ext(doc(None, "scan.jpeg")) == "jpeg")
 check("reject no-mime .pdf", _doc_ext(doc(None, "scan.pdf")) is None)
 check("reject video mime", _doc_ext(doc("video/mp4", "a.mp4")) is None)
 

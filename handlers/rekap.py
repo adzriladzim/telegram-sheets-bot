@@ -372,24 +372,35 @@ async def _ask_bukti(msg, context) -> int:
 
 # ---------- step 5: bukti ----------
 
-_IMG_EXT = {"image/jpeg": "jpg", "image/jpg": "jpg"}
+# ext preserved from original filename; jpeg/jpg normalize only via mime fallback
+_NAME_EXT = {".jpg": "jpg", ".jpeg": "jpeg", ".png": "png", ".webp": "webp"}
+_MIME_EXT = {"image/jpeg": "jpg", "image/jpg": "jpg"}
 
 
 def _doc_ext(document) -> str | None:
-    """File extension for an image document, else None (reject non-image)."""
+    """File extension for an image document, else None (reject non-image).
+
+    Accept jpg/jpeg/png/webp. Source priority:
+    1. original filename extension (follows the original file),
+    2. image/* mime subtype,
+    3. mimetypes guess for other image types (gif, bmp, ...).
+    Non-image mime (e.g. application/octet-stream, pdf) still accepted when
+    the filename itself is a known image extension.
+    """
     name = (document.file_name or "").lower()
     mime = ((document.mime_type or "").split(";")[0]).strip().lower()
+    dot = name.rsplit(".", 1)[-1]
+    ext = _NAME_EXT.get("." + dot) if "." in name else None
+    if ext:
+        return ext
     if mime.startswith("image/"):
-        typ = mime
-    elif not mime:
-        guess, _ = mimetypes.guess_type(name)
-        if not (guess and guess.startswith("image/")):
-            return None
-        typ = guess
-    else:
+        base = re.sub(r"[^a-z0-9]", "", mime.rsplit("/", 1)[-1]) or "img"
+        return _MIME_EXT.get(mime, base)
+    guess, _ = mimetypes.guess_type(name)
+    if not (guess and guess.startswith("image/")):
         return None
-    ext = re.sub(r"[^a-z0-9]", "", _IMG_EXT.get(typ, typ.rsplit("/", 1)[-1])) or "img"
-    return ext
+    base = re.sub(r"[^a-z0-9]", "", guess.rsplit("/", 1)[-1]) or "img"
+    return _MIME_EXT.get(guess, base)
 
 
 async def _upload_bukti_media(update: Update, context: ContextTypes.DEFAULT_TYPE, tg_file, mime: str, ext: str) -> int:
