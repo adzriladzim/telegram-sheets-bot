@@ -572,7 +572,7 @@ class SheetsClient:
         kodes = []
         for rows in self._all_absen_rows().values():
             for r in rows:
-                if r[0].strip() == "Kode Kelas" and len(r) > 1 and r[1].strip():
+                if r and r[0].strip() == "Kode Kelas" and len(r) > 1 and r[1].strip():
                     kodes.append(r[1].strip())
         res = sorted(set(kodes))
         _absen_kodes_cache["data"] = res
@@ -598,7 +598,7 @@ class SheetsClient:
         seen = set()
         for _, rows, nim_header in blocks:
             for r_idx in range(nim_header+2, len(rows)):
-                if rows[r_idx][0].strip() == "Program Studi":
+                if rows[r_idx] and rows[r_idx][0].strip() == "Program Studi":
                     break
                 nim = rows[r_idx][0].strip() if len(rows[r_idx])>0 else ""
                 nama = rows[r_idx][1].strip() if len(rows[r_idx])>1 else ""
@@ -632,10 +632,10 @@ class SheetsClient:
         found = []
         for title, rows in self._all_absen_rows().items():
             for i, r in enumerate(rows):
-                if r[0].strip() == "Kode Kelas" and len(r) > 1 and r[1].strip().casefold() == key:
+                if r and r[0].strip() == "Kode Kelas" and len(r) > 1 and r[1].strip().casefold() == key:
                     nim_header = -1
                     for j in range(i, min(i + 10, len(rows))):
-                        if rows[j][0].strip() == "NIM":
+                        if rows[j] and rows[j][0].strip() == "NIM":
                             nim_header = j
                             break
                     if nim_header == -1:
@@ -655,7 +655,7 @@ class SheetsClient:
         total = hadir = feedback = tidak = belum = izin = 0
         for _, rows, nim_header in blocks:
             for r_idx in range(nim_header + 2, len(rows)):
-                if rows[r_idx][0].strip() == "Program Studi":
+                if rows[r_idx] and rows[r_idx][0].strip() == "Program Studi":
                     break
                 nim = rows[r_idx][0].strip() if len(rows[r_idx]) > 0 else ""
                 if not nim:
@@ -691,7 +691,7 @@ class SheetsClient:
         roster = []
         for title, rows, nim_header in blocks:
             for r_idx in range(nim_header + 2, len(rows)):
-                if rows[r_idx][0].strip() == "Program Studi":
+                if rows[r_idx] and rows[r_idx][0].strip() == "Program Studi":
                     break
                 nim = rows[r_idx][0].strip() if len(rows[r_idx]) > 0 else ""
                 nama = rows[r_idx][1].strip() if len(rows[r_idx]) > 1 else ""
