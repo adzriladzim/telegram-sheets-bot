@@ -21,7 +21,7 @@ HELP = (
     "• /schedule — lihat jadwal minggu ini\n"
     "• /help — bantuan ini\n"
     "• /start — mulai ulang bot\n\n"
-    "<b>Reminder:</b> pesan otomatis tiap jam 04:00 WIB jika ada kelas + notif bot aktif 05:00 WIB.\n\n"
+    "<b>Reminder:</b> pesan otomatis tiap jam {wib} WIB (pagi = jadwal penuh, siang/sore = kelas yang belum di-log) + notif bot aktif 05:00 WIB.\n\n"
     "Pembuat: <b>Adzril Adzim</b>\n"
     "LinkedIn: <a href='https://linkedin.com/in/adzriladzim'>Adzril Adzim</a>\n"
     "Instagram: <a href='https://instagram.com/adzradzen07'>@adzradzen07</a>"
@@ -73,9 +73,10 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cfg: Config = context.bot_data["cfg"]
+    wib = ", ".join(f"{(h + 7) % 24:02d}:{m:02d}" for h, m in cfg.reminder_slots)
     await context.bot.send_message(
         update.effective_chat.id,
-        HELP.format(wib=f"{cfg.reminder_hour:02d}:{cfg.reminder_minute:02d} UTC → {(cfg.reminder_hour + 7) % 24:02d}:{cfg.reminder_minute:02d}"),
+        HELP.format(wib=wib),
         parse_mode=ParseMode.HTML,
     )
 

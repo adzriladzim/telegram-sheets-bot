@@ -23,6 +23,29 @@ def _int(name: str, default: int) -> int:
         raise ConfigError(f"{name} must be an integer, got {raw!r}") from exc
 
 
+def _int_list(name: str, default: str, sep: str = ",") -> tuple[int, ...]:
+    """Comma-separated ints, e.g. REMINDER_TIMES='21,5,13' -> (21, 5, 13)."""
+    raw = os.getenv(name, default).strip()
+    out = []
+    for part in raw.split(sep):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(int(part))
+        except ValueError as exc:
+            raise ConfigError(f"{name} must be comma-separated integers, got {raw!r}") from exc
+    return tuple(out)
+
+
+def _reminder_slots() -> tuple[tuple[int, int], ...]:
+    """(UTC hour, minute) reminder slots. Legacy REMINDER_HOUR/MINUTE = single slot."""
+    legacy_hour = os.getenv("REMINDER_HOUR", "").strip()
+    if legacy_hour:
+        return ((_int("REMINDER_HOUR", 11), _int("REMINDER_MINUTE", 0)),)
+    return tuple((h, 0) for h in _int_list("REMINDER_TIMES", "21,5,13"))
+
+
 @dataclass(frozen=True)
 class Config:
     bot_token: str
@@ -38,8 +61,9 @@ class Config:
     rekap_sheet_id: str
     rekap_bukti_folder_id: str
     semester: str
-    reminder_hour: int  # UTC
-    reminder_minute: int
+    # (UTC hour, minute) reminder slots: 21,5,13 UTC = 04:00,12:00,20:00 WIB.
+    # Slot paling pagi WIB = pengingat jadwal penuh; slot lain = kelas belum di-log.
+    reminder_slots: tuple[tuple[int, int], ...]
     reminder_enabled: bool
     heartbeat_hour: int  # UTC
     heartbeat_minute: int
@@ -97,8 +121,7 @@ def load_config() -> Config:
         rekap_sheet_id=os.getenv("REKAP_SHEET_ID", "1FUK-c1AzTscfXZLQETpGbiyyVCw38n-8FnvYi-lD3Rw").strip(),
         rekap_bukti_folder_id=os.getenv("REKAP_BUKTI_FOLDER_ID", "").strip(),
         semester=os.getenv("SEMESTER", "1").strip(),
-        reminder_hour=_int("REMINDER_HOUR", 11),
-        reminder_minute=_int("REMINDER_MINUTE", 0),
+        reminder_slots=_reminder_slots(),
         reminder_enabled=os.getenv("REMINDER_ENABLED", "true").strip().lower() in {"1", "true", "yes"},
         heartbeat_hour=_int("HEARTBEAT_HOUR", 22),
         heartbeat_minute=_int("HEARTBEAT_MINUTE", 0),
