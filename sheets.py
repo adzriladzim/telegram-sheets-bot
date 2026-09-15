@@ -16,6 +16,7 @@ from functools import partial
 
 import gspread
 import gspread.exceptions
+import googleapiclient.errors
 from google.oauth2.service_account import Credentials
 
 from config import Config
@@ -1182,8 +1183,8 @@ class SheetsClient:
                 return best
         except SheetsError:
             raise
-        except Exception:
-            pass
+        except googleapiclient.errors.HttpError as exc:
+            raise SheetsError(f"Drive: {exc.resp.status} {exc.resp.reason}") from exc
         folder = drive.files().create(
             body={"name": facilitator, "mimeType": "application/vnd.google-apps.folder",
                   "parents": [parent]}, fields="id").execute()
@@ -1209,6 +1210,7 @@ class SheetsClient:
             drive.permissions().create(fileId=f["id"], body={"type": "anyone", "role": "reader"}).execute()
         except Exception:
             pass
+        log.info("uploaded bukti %s -> folder %s", filename, folder)
         return f.get("webViewLink", "")
 
     async def upload_bukti(self, data: bytes, filename: str, mimetype: str, facilitator: str = "") -> str:
@@ -1252,6 +1254,11 @@ class SheetsClient:
             except gspread.exceptions.GSpreadException as exc:
                 log.exception("gspread failure")
                 raise SheetsError(f"Gagal mengakses Google Sheets: {exc}") from exc
+            except googleapiclient.errors.HttpError as exc:
+                status = exc.resp.status
+                log.exception("Drive/Sheets API failure (status %s)", status)
+                hint = " — rate limit, coba lagi nanti." if status == 429 else ""
+                raise SheetsError(f"Google API error {status}{hint}") from exc
             except OSError as exc:
                 log.exception("file/network failure")
                 raise SheetsError("Gagal membaca kredensial/jaringan. Pastikan berkas kredensial tersedia.") from exc
