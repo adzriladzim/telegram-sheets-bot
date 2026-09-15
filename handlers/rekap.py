@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
 import re
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
@@ -364,34 +365,47 @@ async def pick_peran(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def _ask_bukti(msg, context) -> int:
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Kembali", callback_data="rkb:peran")]])
     await msg.reply_text(
-        "6️⃣ Bukti kehadiran? Kirim **foto** screenshot, paste **link Drive**, atau /skip.",
+        "6️⃣ Bukti kehadiran? Kirim **foto** screenshot, dokumen **gambar** (drag-drop), paste **link Drive**, atau /skip.",
         reply_markup=kb)
     return BUKTI
 
 
 # ---------- step 5: bukti ----------
 
-async def photo_bukti(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not update.message.photo:
-        return BUKTI
+_IMG_EXT = {"image/jpeg": "jpg", "image/jpg": "jpg"}
+
+
+def _doc_ext(document) -> str | None:
+    """File extension for an image document, else None (reject non-image)."""
+    name = (document.file_name or "").lower()
+    mime = ((document.mime_type or "").split(";")[0]).strip().lower()
+    if mime.startswith("image/"):
+        typ = mime
+    elif not mime:
+        guess, _ = mimetypes.guess_type(name)
+        if not (guess and guess.startswith("image/")):
+            return None
+        typ = guess
+    else:
+        return None
+    ext = re.sub(r"[^a-z0-9]", "", _IMG_EXT.get(typ, typ.rsplit("/", 1)[-1])) or "img"
+    return ext
+
+
+async def _upload_bukti_media(update: Update, context: ContextTypes.DEFAULT_TYPE, tg_file, mime: str, ext: str) -> int:
     wait = await update.message.reply_text("⏳ Upload bukti ke Drive...")
     try:
         c = context.user_data["cls"]
         tanggal = _tanggal_kelas(context, c)
         rec_tmp = _build_base(context, c, tanggal)
-        photo = update.message.photo[-1]
-        tg_file = await photo.get_file()
         data = bytes(await tg_file.download_as_bytearray())
-        ext = "jpg"
-        if (tg_file.file_path or "").lower().endswith(".png"):
-            ext = "png"
         fname = rec_tmp.bukti_filename(ext)
-        link = await _sheets(context).upload_bukti(data, fname, f"image/{ext}", rec_tmp.facilitator)
+        link = await _sheets(context).upload_bukti(data, fname, mime, rec_tmp.facilitator)
         context.user_data["bukti"] = link
         context.user_data["bukti_name"] = fname
         try: await wait.delete()
         except Exception: pass
-        await update.message.reply_text(f"✅ Bukti terupload: {rec_tmp.bukti_filename(ext)}")
+        await update.message.reply_text(f"✅ Bukti terupload: {fname}")
     except sheets.SheetsError as exc:
         try: await wait.delete()
         except Exception: pass
@@ -405,6 +419,30 @@ async def photo_bukti(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     if context.user_data.get("fix_row"):
         return await _confirm_fix(update.message, context)
     return await _confirm(update.message, context)
+
+
+async def photo_bukti(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not update.message.photo:
+        return BUKTI
+    photo = update.message.photo[-1]
+    tg_file = await photo.get_file()
+    ext = "png" if (tg_file.file_path or "").lower().endswith(".png") else "jpg"
+    return await _upload_bukti_media(update, context, tg_file, f"image/{ext}", ext)
+
+
+async def doc_bukti(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    doc = update.message.document
+    if doc is None:
+        return BUKTI
+    ext = _doc_ext(doc)
+    if ext is None:
+        await update.message.reply_text(
+            "⚠️ Hanya dokumen **gambar** yang diterima sebagai bukti (foto/scan .jpg/.png/.webp). "
+            "Kirim sebagai foto, dokumen gambar (drag-drop), link Drive, atau /skip.")
+        return BUKTI
+    tg_file = await doc.get_file()
+    mime = ((doc.mime_type or "").split(";")[0]).strip().lower() or f"image/{ext}"
+    return await _upload_bukti_media(update, context, tg_file, mime, ext)
 
 
 async def link_bukti(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -608,7 +646,7 @@ def register(app: Application, cfg: Config) -> None:
             TIPE: [CallbackQueryHandler(pick_tipe, pattern=r"^rkt:[os]$"), CallbackQueryHandler(back_to_rk_meeting, pattern=r"^rkb:meeting$")],
             SESI: [CallbackQueryHandler(pick_sesi, pattern=r"^rks:\d+$"), CallbackQueryHandler(back_to_rk_tipe, pattern=r"^rkb:tipe$"), MessageHandler(_SKIP_FILTER, enter_sesi)],
             PERAN: [CallbackQueryHandler(pick_peran, pattern=r"^rkp:\d+$")],
-            BUKTI: [CallbackQueryHandler(back_to_rk_sesi, pattern=r"^rkb:sesi$"), CallbackQueryHandler(back_to_rk_peran, pattern=r"^rkb:peran$"), CommandHandler("skip", skip_bukti), MessageHandler(filters.PHOTO, photo_bukti), MessageHandler(_SKIP_FILTER, link_bukti)],
+            BUKTI: [CallbackQueryHandler(back_to_rk_sesi, pattern=r"^rkb:sesi$"), CallbackQueryHandler(back_to_rk_peran, pattern=r"^rkb:peran$"), CommandHandler("skip", skip_bukti), MessageHandler(filters.PHOTO, photo_bukti), MessageHandler(filters.Document.ALL, doc_bukti), MessageHandler(_SKIP_FILTER, link_bukti)],
             CONFIRM: [CallbackQueryHandler(confirm_cb, pattern=r"^rkx:(ok|no)$"), CallbackQueryHandler(back_to_rk_bukti, pattern=r"^rkb:bukti$")],
             ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, timeout)],
         },
@@ -664,7 +702,7 @@ async def back_to_rk_bukti(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     q = update.callback_query
     await q.answer()
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Kembali", callback_data="rkb:peran")]])
-    await q.message.reply_text("6️⃣ Bukti kehadiran? Kirim **foto** screenshot, paste **link Drive**, atau /skip.", reply_markup=kb)
+    await q.message.reply_text("6️⃣ Bukti kehadiran? Kirim **foto** screenshot, dokumen **gambar** (drag-drop), paste **link Drive**, atau /skip.", reply_markup=kb)
     return BUKTI
 
 

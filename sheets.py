@@ -68,6 +68,16 @@ COL_MK, COL_DOSEN, COL_RUANG, COL_ROMBEL, COL_SKS, COL_ZOOM_NO, COL_ZOOM_LINK, C
 TIPE_KELAS_MAP = {"reguler": "Reguler", "professional": "Professional", "akselerasi": "Akselerasi", "akselerasi & professional": "Akselerasi & Professional", "professional & akselerasi": "Akselerasi & Professional", "pro": "Professional", "ae": "Akselerasi", "ae & pro": "Akselerasi & Professional", "pro & ae": "Akselerasi & Professional"}
 DAY_ORDER = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
 
+# Chars illegal in Google Drive filenames (plus '_' — reserved as our separator).
+_ILLEGAL_FILENAME = re.compile(r'[/\\:*?"<>|_\x00-\x1f]')
+
+
+def _safe_filename_part(part: str, fallback: str = "unnamed") -> str:
+    """Sanitize one filename segment for Google Drive (strip illegal chars, collapse spaces)."""
+    out = _ILLEGAL_FILENAME.sub("-", (part or "").strip())
+    out = re.sub(r"\s+", " ", out).strip(" .")
+    return out or fallback
+
 
 class SheetsError(RuntimeError):
     """User-presentable Sheets failure."""
@@ -256,8 +266,15 @@ class RekapRecord:
         ]
 
     def bukti_filename(self, ext: str = "jpg") -> str:
-        first = self.facilitator  # full name per user decision
-        return f"{self.tanggal}_{self.lecturer}_{self.subject}_{first}.{ext}"
+        """Drive filename per reference format {tanggal}_{dosen}_{matkul}_{nama_fasil}.{ext}."""
+        ext = (ext or "jpg").lstrip(".") or "jpg"
+        parts = (
+            _safe_filename_part(self.tanggal, "tanggal"),
+            _safe_filename_part(self.lecturer, "dosen"),
+            _safe_filename_part(self.subject, "matkul"),
+            _safe_filename_part(self.facilitator, "fasil"),
+        )
+        return "_".join(parts) + "." + ext
 
 
 def today_str_wib() -> str:
