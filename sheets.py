@@ -807,20 +807,35 @@ class SheetsClient:
                 continue
             hari_tanggal = row[2].strip() if len(row) > 2 else ""  # Col C
             day = hari_tanggal.split(",")[0].strip() if "," in hari_tanggal else hari_tanggal.split()[0] if hari_tanggal else ""
-            # Lookup zoom/sks/semester from master by kode for backup class
+            # Lookup zoom/sks/semester/keterangan from master by kode for backup class.
+            # Kode can repeat across RomBel: collect every master row with that kode,
+            # prefer the one whose RomBel (col 8) matches backup Col H, else first match.
             zoom_no = ""
             sks = ""
             semester = ""
+            ket_master = ""
             try:
                 mrows = self._cached_rows(self.cfg.sheet_id, self.cfg.master_sheet)
-                for mr in mrows:
-                    if len(mr) > COL_KODE and mr[COL_KODE].strip().casefold() == kode.casefold():
-                        zoom_no = mr[COL_ZOOM_NO].strip() if len(mr) > COL_ZOOM_NO else ""
-                        sks = mr[COL_SKS].strip() if len(mr) > COL_SKS else ""
-                        rombel_tmp = mr[COL_ROMBEL].strip() if len(mr) > COL_ROMBEL else ""
-                        sems = sorted(set(re.findall(r"\b(\d+)\b", rombel_tmp)))
-                        semester = " & ".join(sems) if sems else ""
-                        break
+                candidates = [
+                    mr for mr in mrows
+                    if len(mr) > COL_KODE and mr[COL_KODE].strip().casefold() == kode.casefold()
+                ]
+                chosen = None
+                room_key = self._normalize(row[7]) if len(row) > 7 else ""
+                if room_key:
+                    for mr in candidates:
+                        if len(mr) > COL_ROMBEL and self._normalize(mr[COL_ROMBEL]) == room_key:
+                            chosen = mr
+                            break
+                if chosen is None and candidates:
+                    chosen = candidates[0]  # fallback: first kode match
+                if chosen is not None:
+                    zoom_no = chosen[COL_ZOOM_NO].strip() if len(chosen) > COL_ZOOM_NO else ""
+                    sks = chosen[COL_SKS].strip() if len(chosen) > COL_SKS else ""
+                    rombel_tmp = chosen[COL_ROMBEL].strip() if len(chosen) > COL_ROMBEL else ""
+                    sems = sorted(set(re.findall(r"\b(\d+)\b", rombel_tmp)))
+                    semester = " & ".join(sems) if sems else ""
+                    ket_master = chosen[COL_KETERANGAN].strip() if len(chosen) > COL_KETERANGAN else ""
             except Exception as exc:
                 log.warning("backup master lookup failed: %s", exc)
             out.append(ClassEntry(
@@ -835,7 +850,7 @@ class SheetsClient:
                 sks=sks,
                 zoom_number=zoom_no,
                 zoom_link="",
-                keterangan=row[9].strip() if len(row) > 9 else "",
+                keterangan=(row[9].strip() if len(row) > 9 else "") or ket_master,
                 backup_hari_tanggal=hari_tanggal,
                 semester=semester,
                 row_index=i,
