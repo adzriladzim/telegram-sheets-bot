@@ -278,6 +278,22 @@ def last_date_for_day(day_name: str) -> str:
     return (today - timedelta(days=delta)).strftime("%d/%m/%Y")
 
 
+def _mode_incompatible(mode: str, status: str) -> bool:
+    """Warn when an absen status contradicts the student's col-C Mode Kelas Asal
+    (e.g. Online marked as on-site 'S'). Soft check — never blocks the write."""
+    m = (mode or "").strip().casefold()
+    s = (status or "").strip().upper()
+    online = "online" in m
+    onsite = any(k in m for k in ("onsite", "offline", "tatap", "ceramah"))
+    if not (online or onsite):
+        return False
+    if online and not onsite and s in ("S", "SF"):
+        return True
+    if onsite and not online and s in ("O", "OF"):
+        return True
+    return False
+
+
 class SheetsClient:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
@@ -582,33 +598,36 @@ class SheetsClient:
     async def list_absen_kodes(self) -> list[str]:
         return await self._run(self._list_absen_kodes)
 
-    def _list_students(self, kode: str) -> list[tuple[str, str]]:
+    def _list_students(self, kode: str) -> list[tuple[str, str, str]]:
+        """Roster (nim, nama, mode) for a Kode, aggregated across ALL matching
+        absen blocks (a class may span several prodi tabs)."""
         key = kode.casefold()
         hit = _absen_students_cache.get(key)
         if hit and time.time() - hit[0] < _ABSEN_STUDENTS_TTL:
             return hit[1]
-        for rows in self._all_absen_rows().values():
-            for i, r in enumerate(rows):
-                if r[0].strip() == "Kode Kelas" and len(r) > 1 and r[1].strip().casefold() == key:
-                    nim_header = -1
-                    for j in range(i, min(i+10, len(rows))):
-                        if rows[j][0].strip() == "NIM":
-                            nim_header = j
-                            break
-                    if nim_header == -1:
-                        return []
-                    out = []
-                    for r_idx in range(nim_header+2, len(rows)):
-                        if rows[r_idx][0].strip() == "Program Studi":
-                            break
-                        nim = rows[r_idx][0].strip() if len(rows[r_idx])>0 else ""
-                        nama = rows[r_idx][1].strip() if len(rows[r_idx])>1 else ""
-                        if nim or nama:
-                            out.append((nim, nama or "-"))
-                    _absen_students_cache[key] = (time.time(), out)
-                    return out
-        _absen_students_cache[key] = (time.time(), [])
-        return []
+        try:
+            blocks = self._locate_absen_block(kode)
+        except SheetsError:
+            _absen_students_cache[key] = (time.time(), [])
+            return []
+        out = []
+        seen = set()
+        for _, rows, nim_header in blocks:
+            for r_idx in range(nim_header+2, len(rows)):
+                if rows[r_idx][0].strip() == "Program Studi":
+                    break
+                nim = rows[r_idx][0].strip() if len(rows[r_idx])>0 else ""
+                nama = rows[r_idx][1].strip() if len(rows[r_idx])>1 else ""
+                mode = rows[r_idx][2].strip() if len(rows[r_idx])>2 else ""
+                if not (nim or nama):
+                    continue
+                dkey = (nim.casefold(), nama.casefold())
+                if dkey in seen:
+                    continue
+                seen.add(dkey)
+                out.append((nim, nama or "-", mode))
+        _absen_students_cache[key] = (time.time(), out)
+        return out
 
     def _invalidate_absen_students(self, kode: str | None = None) -> None:
         """Dropped on absen writes so edits (roster / status) re-fetch. Empty result
@@ -618,14 +637,18 @@ class SheetsClient:
         else:
             _absen_students_cache.pop(kode.casefold(), None)
 
-    async def list_students(self, kode: str) -> list[tuple[str, str]]:
+    async def list_students(self, kode: str) -> list[tuple[str, str, str]]:
         return await self._run(partial(self._list_students, kode))
 
-    def _locate_absen_block(self, kode: str):
-        """Return (title, rows, nim_header_idx) for a Kode across all prodi sheets."""
+    def _locate_absen_block(self, kode: str) -> list[tuple[str, list[list[str]], int]]:
+        """Return ALL absen blocks (title, rows, nim_header) matching a Kode across
+        every prodi sheet — a class can have several blocks (multi-prodi), so we
+        never stop at the first match."""
+        key = kode.casefold()
+        found = []
         for title, rows in self._all_absen_rows().items():
             for i, r in enumerate(rows):
-                if r[0].strip() == "Kode Kelas" and len(r) > 1 and r[1].strip().casefold() == kode.casefold():
+                if r[0].strip() == "Kode Kelas" and len(r) > 1 and r[1].strip().casefold() == key:
                     nim_header = -1
                     for j in range(i, min(i + 10, len(rows))):
                         if rows[j][0].strip() == "NIM":
@@ -633,71 +656,85 @@ class SheetsClient:
                             break
                     if nim_header == -1:
                         raise SheetsError("Header NIM tidak ditemukan")
-                    return title, rows, nim_header
-        raise SheetsError(f"Kode {kode} tidak ditemukan di sheet Absen (cek 15 prodi).")
+                    found.append((title, rows, nim_header))
+        if not found:
+            raise SheetsError(f"Kode {kode} tidak ditemukan di sheet Absen (cek 15 prodi).")
+        return found
 
     def _absen_counts(self, kode: str, pertemuan: int) -> dict:
-        """Count statuses in a pertemuan column. P=S+O+SF+OF, Q=S+O, R=A, S_blm=SF+OF."""
-        title, rows, nim_header = self._locate_absen_block(kode)
+        """Count statuses in a pertemuan column, aggregated across ALL matching
+        absen blocks. P=S+O+SF+OF, Q=S+O, R=A, S_blm=SF+OF."""
+        blocks = self._locate_absen_block(kode)
         if not 1 <= pertemuan <= 16:
             raise SheetsError("Pertemuan harus 1-16")
         col_idx = 3 + (pertemuan - 1)
         total = hadir = feedback = tidak = belum = izin = 0
-        for r_idx in range(nim_header + 2, len(rows)):
-            if rows[r_idx][0].strip() == "Program Studi":
-                break
-            nim = rows[r_idx][0].strip() if len(rows[r_idx]) > 0 else ""
-            if not nim:
-                continue
-            total += 1
-            val = rows[r_idx][col_idx].strip().upper() if len(rows[r_idx]) > col_idx else ""
-            if val in ("S", "O", "SF", "OF"):
-                hadir += 1
-            if val in ("S", "O"):
-                feedback += 1
-            if val == "A":
-                tidak += 1
-            if val in ("SF", "OF"):
-                belum += 1
-            if val == "I":
-                izin += 1
+        for _, rows, nim_header in blocks:
+            for r_idx in range(nim_header + 2, len(rows)):
+                if rows[r_idx][0].strip() == "Program Studi":
+                    break
+                nim = rows[r_idx][0].strip() if len(rows[r_idx]) > 0 else ""
+                if not nim:
+                    continue
+                total += 1
+                val = rows[r_idx][col_idx].strip().upper() if len(rows[r_idx]) > col_idx else ""
+                if val in ("S", "O", "SF", "OF"):
+                    hadir += 1
+                if val in ("S", "O"):
+                    feedback += 1
+                if val == "A":
+                    tidak += 1
+                if val in ("SF", "OF"):
+                    belum += 1
+                if val == "I":
+                    izin += 1
+        sheets_list = sorted({b[0] for b in blocks})
         return {"total": total, "hadir": hadir, "feedback": feedback,
-                "tidak": tidak, "belum": belum, "izin": izin, "sheet": title,
-                "prodi": title}
+                "tidak": tidak, "belum": belum, "izin": izin,
+                "sheet": sheets_list[0] if sheets_list else "",
+                "prodi": sheets_list[0] if sheets_list else "",
+                "sheets": sheets_list}
 
     async def absen_counts(self, kode: str, pertemuan: int) -> dict:
         return await self._run(partial(self._absen_counts, kode, pertemuan))
 
     def _resolve_absen(self, kode: str, identifiers: list[str]) -> dict:
-        """Resolve identifiers to student rows. NIM wajib exact-penuh, Nama contains.
-        Returns {matched: [(row_idx, nim, nama)], ambiguous: {ident: [nama]}, unmatched: [ident]}."""
-        title, rows, nim_header = self._locate_absen_block(kode)
+        """Resolve identifiers to student rows across ALL matching absen blocks.
+        NIM wajib exact-penuh, Nama contains.
+        Returns {blocks, matched: [(row_idx, nim, nama, mode, title)],
+        ambiguous: {ident: [nama]}, unmatched: [ident]}."""
+        blocks = self._locate_absen_block(kode)
         roster = []
-        for r_idx in range(nim_header + 2, len(rows)):
-            if rows[r_idx][0].strip() == "Program Studi":
-                break
-            nim = rows[r_idx][0].strip() if len(rows[r_idx]) > 0 else ""
-            nama = rows[r_idx][1].strip() if len(rows[r_idx]) > 1 else ""
-            if nim or nama:
-                roster.append((r_idx, nim, nama))
+        for title, rows, nim_header in blocks:
+            for r_idx in range(nim_header + 2, len(rows)):
+                if rows[r_idx][0].strip() == "Program Studi":
+                    break
+                nim = rows[r_idx][0].strip() if len(rows[r_idx]) > 0 else ""
+                nama = rows[r_idx][1].strip() if len(rows[r_idx]) > 1 else ""
+                mode = rows[r_idx][2].strip() if len(rows[r_idx]) > 2 else ""
+                if nim or nama:
+                    roster.append((r_idx, nim, nama or "-", mode, title))
         matched, ambiguous, unmatched = [], {}, []
         for ident in identifiers:
             norm = self._normalize(ident)
             if not norm:
                 continue
             if norm.isdigit():
-                hits = [(i, n, nm) for i, n, nm in roster if n.strip() == norm]
+                hits = [e for e in roster if e[1].strip() == norm]
             else:
-                hits = [(i, n, nm) for i, n, nm in roster if norm in self._normalize(nm)]
+                hits = [e for e in roster if norm in self._normalize(e[2])]
             if len(hits) == 1:
                 if hits[0] not in matched:
                     matched.append(hits[0])
             elif len(hits) > 1:
-                ambiguous[ident] = [nm for _, _, nm in hits[:5]]
+                ambiguous[ident] = [e[2] for e in hits[:5]]
             else:
                 unmatched.append(ident)
-        return {"title": title, "rows": rows, "nim_header": nim_header,
-                "matched": matched, "ambiguous": ambiguous, "unmatched": unmatched}
+        return {"blocks": blocks, "matched": matched,
+                "ambiguous": ambiguous, "unmatched": unmatched,
+                "title": blocks[0][0] if blocks else "",
+                "rows": blocks[0][1] if blocks else [],
+                "nim_header": blocks[0][2] if blocks else -1}
 
     def _update_absen(self, kode: str, pertemuan: int, identifiers: list[str], status: str) -> dict:
         res = self._resolve_absen(kode, identifiers)
@@ -705,24 +742,32 @@ class SheetsClient:
             raise SheetsError("Pertemuan harus 1-16")
         col_idx = 3 + (pertemuan - 1)
         col_letter = chr(ord('A') + col_idx)
-        title = res["title"]
         updated = 0
         data = []
-        for r_idx, _, _ in res["matched"]:
-            data.append({"range": f"{col_letter}{r_idx+1}", "values": [[status]]})
+        written_titles = set()
+        warnings = []
+        for r_idx, nim, nama, mode, title in res["matched"]:
+            data.append({"range": f"'{title}'!{col_letter}{r_idx+1}", "values": [[status]]})
+            written_titles.add(title)
             updated += 1
+            if mode and _mode_incompatible(mode, status):
+                warnings.append(f"{nim or nama} ({mode})")
         if data:
             self._ss(self.cfg.absen_sheet_id).values_batch_update(
                 {"valueInputOption": "USER_ENTERED", "data": data})
-            self._invalidate_rows(self.cfg.absen_sheet_id, title)
+            for title in written_titles:
+                self._invalidate_rows(self.cfg.absen_sheet_id, title)
         self._invalidate_absen_students(kode)
-        log.info("Updated absen %s pertemuan %d status %s: %d rows in sheet %s", kode, pertemuan, status, updated, title)
+        log.info("Updated absen %s pertemuan %d status %s: %d rows (%s)",
+                 kode, pertemuan, status, updated, ",".join(sorted(written_titles)) or "-")
         if updated == 0 and not res["ambiguous"] and not res["unmatched"]:
             raise SheetsError("Tidak ada NIM/Nama yang cocok")
         return {"updated": updated, "ambiguous": res["ambiguous"],
                 "unmatched": res["unmatched"],
-                "names": [nm for _, _, nm in res["matched"][:10]],
-                "sheet": title}
+                "names": [nm for _, _, nm, _, _ in res["matched"][:10]],
+                "sheets": sorted(written_titles),
+                "sheet": res["title"],
+                "warnings": warnings}
 
     async def update_absen(self, kode: str, pertemuan: int, identifiers: list[str], status: str) -> dict:
         return await self._run(partial(self._update_absen, kode, pertemuan, identifiers, status))

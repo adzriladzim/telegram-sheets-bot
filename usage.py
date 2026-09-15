@@ -20,7 +20,7 @@ def _path() -> Path:
     from config import BASE_DIR
     return BASE_DIR / "data" / "usage.json"
 
-def log(chat_id: int, name: str, action: str, kode: str):
+def log(chat_id: int, name: str, action: str, kode: str, **extra):
     p = _path()
     p.parent.mkdir(parents=True, exist_ok=True)
     with _lock:
@@ -29,7 +29,11 @@ def log(chat_id: int, name: str, action: str, kode: str):
         except Exception as exc:
             _log.warning("usage.json read failed: %s", exc)
             data = []
-        data.append({"chat_id": chat_id, "name": name, "action": action, "kode": kode, "ts": datetime.now(WIB).isoformat()})
+        entry = {"chat_id": chat_id, "name": name, "action": action, "kode": kode, "ts": datetime.now(WIB).isoformat()}
+        # Backward-compat extra detail (e.g. absen pertemuan/status/jumlah).
+        # Existing callers pass 4 args; action-specific extras only when provided.
+        entry.update({k: v for k, v in extra.items() if v is not None and v != ""})
+        data.append(entry)
         p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 def stats():

@@ -28,7 +28,9 @@ async def cmd_absen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
     loading = await update.effective_message.reply_text("⏳ Ambil daftar kelas...")
     try:
-        my_classes = await _sheets(context).get_classes(name)
+        personal, backup = await _sheets(context).get_all_loggable_classes(name)
+        my_classes = personal + backup
+        backup_kodes = {c.code for c in backup}
         my_kodes = {c.code for c in my_classes}
     except sheets.SheetsError as e:
         try: await loading.delete()
@@ -52,22 +54,26 @@ async def cmd_absen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["absen_today"] = today
     context.user_data["absen_my_today"] = my_today
     context.user_data["absen_my_other"] = my_other
-    kb = _kode_kb(my_today, my_other, today)
+    context.user_data["absen_backup"] = backup_kodes
+    kb = _kode_kb(my_today, my_other, today, backup_kodes)
     await update.effective_message.reply_text(f"1️⃣ Pilih Kode Kelas: ({len(my_today)} hari ini)", reply_markup=kb)
     context.user_data["absen_kodes"] = list(my_kodes)
     return KODE
 
 
-def _kode_kb(my_today, my_other, today) -> InlineKeyboardMarkup:
+def _kode_kb(my_today, my_other, today, backup=None) -> InlineKeyboardMarkup:
+    backup = backup or set()
     kb = []
     if my_today:
         kb.append([InlineKeyboardButton(f"— Hari Ini ({today}) —", callback_data="abk:header")])
         for k in my_today:
-            kb.append([InlineKeyboardButton(f"⭐ {k} (hari ini)", callback_data=f"abk:{k}")])
+            mark = "🔄" if k in backup else "⭐"
+            kb.append([InlineKeyboardButton(f"{mark} {k} (hari ini)", callback_data=f"abk:{k}")])
     if my_other:
         kb.append([InlineKeyboardButton("— Kelas Lain Saya —", callback_data="abk:header2")])
         for k in my_other[:15]:
-            kb.append([InlineKeyboardButton(f"⭐ {k}", callback_data=f"abk:{k}")])
+            mark = "🔄" if k in backup else "⭐"
+            kb.append([InlineKeyboardButton(f"{mark} {k}", callback_data=f"abk:{k}")])
     kb.append([InlineKeyboardButton("⌨️ Ketik Kode Lain", callback_data="abk:manual")])
     kb.append([InlineKeyboardButton("❌ Batal", callback_data="abk:cancel")])
     return InlineKeyboardMarkup(kb)
@@ -79,7 +85,8 @@ async def back_to_kode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     my_today = context.user_data.get("absen_my_today", [])
     my_other = context.user_data.get("absen_my_other", [])
     today = context.user_data.get("absen_today", "")
-    await q.message.reply_text("1️⃣ Pilih Kode Kelas:", reply_markup=_kode_kb(my_today, my_other, today))
+    backup = context.user_data.get("absen_backup", set())
+    await q.message.reply_text("1️⃣ Pilih Kode Kelas:", reply_markup=_kode_kb(my_today, my_other, today, backup))
     return KODE
 
 
@@ -203,9 +210,12 @@ def _build_checklist_kb(students, selected, page=0):
     kb = []
     start = page * PAGE_SIZE
     for i in range(start, min(start + PAGE_SIZE, len(students))):
-        nim, nama = students[i]
+        nim, nama, mode = students[i]
         prefix = "✅" if nim in selected else "⬜"
-        kb.append([InlineKeyboardButton(f"{prefix} {nama[:20]}", callback_data=f"chk:{i}")])
+        label = f"{prefix} {nama[:20]}"
+        if mode:
+            label += f" [{mode[:10]}]"
+        kb.append([InlineKeyboardButton(label, callback_data=f"chk:{i}")])
     nav = []
     if page > 0:
         nav.append(InlineKeyboardButton("‹ Prev", callback_data="chk:prev"))
@@ -376,10 +386,13 @@ async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             extra += f"\n⚠️ Ambigu (pakai NIM penuh): {amb}"
         if res["unmatched"]:
             extra += f"\n❌ Tak ketemu: {', '.join(res['unmatched'][:5])}"
+        if res.get("warnings"):
+            extra += f"\n⚠️ Mode tak cocok: {', '.join(res['warnings'][:5])}"
         await q.message.reply_text(f"✅ Absen tercatat: {kode} pertemuan {per} → {n} mahasiswa status {status}{extra}")
         # Log usage
         import usage
-        try: usage.log(update.effective_chat.id, users.get(update.effective_chat.id) or "", "absen", kode)
+        try: usage.log(update.effective_chat.id, users.get(update.effective_chat.id) or "", "absen", kode,
+                       pertemuan=per, status=status, jumlah=len(ids))
         except: pass
         context.user_data.clear()
         return ConversationHandler.END

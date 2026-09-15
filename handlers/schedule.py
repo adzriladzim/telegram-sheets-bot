@@ -25,26 +25,36 @@ async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     busy = await st.loading(update, context, "⏳ Ambil jadwal dari sheet...")
     try:
-        classes = await context.bot_data["sheets"].get_classes(facilitator)
+        personal, backup = await context.bot_data["sheets"].get_all_loggable_classes(facilitator)
     except sheets.SheetsError as exc:
         await st.unbusy(busy)
         await update.effective_message.reply_text(f"⚠️ {exc}")
         return
     await st.unbusy(busy)
+    classes = personal + backup
     if not classes:
-        await update.effective_message.reply_text(f"Tidak ada kelas terdaftar untuk {facilitator} di master sheet.")
+        await update.effective_message.reply_text(f"Tidak ada kelas terdaftar untuk {facilitator} (jadwal + backup kosong).")
         return
     by_day = sheets.this_week_classes(classes)
     today = sheets.today_day_wib()
+    today_full = sheets.today_str_wib()
+    from handlers.log import _parse_backup_date
     lines = ["🗓 <b>Jadwal Kelas Minggu Ini</b>", ""]
     for day in sheets.DAY_ORDER:
         for c in by_day.get(day, []):
-            mark = " ← <b>HARI INI</b>" if day == today else ""
-            lines.append(
-                f"<b>{day}</b> {c.time_range}{mark}\n"
-                f"  {html.escape(c.code)} — {html.escape(c.subject)}\n"
-                f"  🏫 {html.escape(c.room)} | 👤 {html.escape(c.lecturer)} | {html.escape(c.zoom_label)}"
-            )
+            if c.category == "Backup":
+                mark = " ← <b>HARI INI</b>" if _parse_backup_date(c.backup_hari_tanggal) == today_full else ""
+                lines.append(
+                    f"<b>{day}</b>🔄 {html.escape(c.code)} — {html.escape(c.subject)} ({c.backup_hari_tanggal}){mark}\n"
+                    f"  🏫 {html.escape(c.room)} | 👤 {html.escape(c.lecturer)} | {html.escape(c.zoom_label)}"
+                )
+            else:
+                mark = " ← <b>HARI INI</b>" if day == today else ""
+                lines.append(
+                    f"<b>{day}</b> {c.time_range}{mark}\n"
+                    f"  {html.escape(c.code)} — {html.escape(c.subject)}\n"
+                    f"  🏫 {html.escape(c.room)} | 👤 {html.escape(c.lecturer)} | {html.escape(c.zoom_label)}"
+                )
             lines.append("")
     missing = [c.code for c in classes if not sheets.this_week_classes([c])]
     if missing:
