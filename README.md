@@ -115,7 +115,7 @@ Menyapa user + menampilkan tombol menu:
 >
 > Terdaftar sebagai: Riko Julianto
 >
-> Aku bot pencatat keseharian fasil di Cakrawala University.
+> Aku bot pencatat log pendampingan fasil di Cakrawala University.
 > Tekan tombol di bawah atau kirim /zoom untuk mencatat kelas hari ini.
 
 Tombol menu sama saja dengan perintah — **📝 Zoom** = `/zoom`, **✅ Absen** = `/absen`, dst.
@@ -151,7 +151,7 @@ Tap salah satu → `✅ Terdaftar sebagai: Ratu Bilqis`
 
 ### 3.3 `/zoom` — isi Zoom Record
 
-**Alias:** `/log`, `/zoom_record`. Mencatat kelas yang sudah diampu ke tab **Zoom Record** (14 kolom: tanggal pengisian, fasil, tanggal kelas, semester, kelas, mata kuliah, pertemuan, skema, SKS, tipe, dosen, jam mulai, Zoom, catatan).
+**Alias:** `/log`, `/zoom_record`. Mencatat kelas yang sudah didampingi ke tab **Zoom Record** (14 kolom: tanggal pengisian, fasil, tanggal kelas, semester, kelas, mata kuliah, pertemuan, skema, SKS, tipe, dosen, jam mulai, Zoom, catatan).
 
 **Alur step-by-step:**
 

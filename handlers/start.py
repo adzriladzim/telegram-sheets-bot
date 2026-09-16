@@ -13,11 +13,11 @@ import users
 
 HELP = (
     "<b>TelefasilBot</b> — asisten harian fasil Cakrawala University.\n\n"
-    "Semua urusan kelas dari chat ini: catat ngajar, absen, rekap, backup, "
+    "Semua urusan kelas dari chat ini: catat log pendampingan, absen, rekap, backup, "
     "sampai jadwal. 👇\n\n"
     "<b>Perintah:</b>\n"
     "• /register &lt;nama&gt; — daftar nama fasilitator (cukup sekali)\n"
-    "• /zoom — catat kelas yang baru diajar\n"
+    "• /zoom — catat log pendampingan kelas baru\n"
     "• /absen — rekap kehadiran mahasiswa\n"
     "• /rekap — rekap kehadiran fasil\n"
     "• /backup — izin & backup fasil\n"
@@ -69,7 +69,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         f"👋 Halo {first}!\n\n"
         f"Aku <b>TelefasilBot</b> — asisten harian fasil Cakrawala: catat "
-        f"ngajar, absen, rekap, backup, sampai jadwal, semua dari chat ini.\n\n"
+        f"log pendampingan, absen, rekap, backup, sampai jadwal, semua dari chat ini.\n\n"
         f"{status}\n\n"
         f"Tekan tombol di bawah atau kirim /zoom untuk mulai mencatat kelas "
         f"hari ini. 👇",
