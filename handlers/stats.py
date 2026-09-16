@@ -221,7 +221,7 @@ def _build_report(names: list[str], data: list[dict], pdata: list[dict], days: i
     if per_menu:
         for m in ACT_ORDER + sorted(set(per_menu) - set(ACT_ORDER)):
             if m in per_menu:
-                L.append(f"• {ACT_LABEL.get(m, m)} — {per_menu[m]}x")
+                L.append(f"• {html.escape(ACT_LABEL.get(m, m))} — {per_menu[m]}x")
     else:
         L.append("• (belum ada aksi periode ini)")
     L += ["", "<b>Roster semua fasil</b>"]
@@ -229,10 +229,10 @@ def _build_report(names: list[str], data: list[dict], pdata: list[dict], days: i
     for n in roster:
         c = per_user[n]
         acts = " ".join(f"{ACT_LABEL.get(k, k)} {c.get(k, 0)}" for k in ACT_ORDER)
-        ts = last_ts.get(n, "")[:16].replace("T", " ") or "—"
+        ts = html.escape(last_ts.get(n, "")[:16].replace("T", " ")) or "—"
         L.append(f"• {html.escape(n)} — {acts}, terakhir {ts}")
     if rare:
-        L += ["", f"<b>Jarang pakai</b> ({_PERIOD_LABEL[days]}, <{thr} aksi)"]
+        L += ["", f"<b>Jarang pakai</b> ({_PERIOD_LABEL[days]}, kurang dari {thr} aksi)"]
         L += [f"• {html.escape(n)} ({sum(per_user[n].values())} aksi)" for n in sorted(rare)]
     if never:
         L += ["", f"<b>Belum pernah pakai ({len(never)})</b>"]
@@ -241,7 +241,7 @@ def _build_report(names: list[str], data: list[dict], pdata: list[dict], days: i
         L += ["", "<b>Kelengkapan minggu ini</b>",
               "<i>✓ terisi · ✗ lewat belum · ○ jadwal mendatang</i>"]
         for name, row in matriks:
-            codes = ",".join(r[0] for r in row)
+            codes = ",".join(html.escape(r[0]) for r in row)
             L.append(f"• {html.escape(name)} — {codes}")
             L.append(f"   log {' '.join(r[1] for r in row)} | rekap {' '.join(r[2] for r in row)}")
     if arrears:
@@ -253,7 +253,7 @@ def _build_report(names: list[str], data: list[dict], pdata: list[dict], days: i
             items = []
             for c, label, pn in by_name[name]:
                 extra = " [absen belum]" if pn else (" [absen ada]" if pn is not None else "")
-                items.append(f"{c.code} ({label}){extra}")
+                items.append(f"{html.escape(c.code)} ({html.escape(label)}){extra}")
             L.append(f"• {html.escape(name)}: {', '.join(items)}")
     if cov is not None:
         items = sorted(((k, len(v)) for k, v in cov.items()), key=lambda x: (x[1], x[0]))
