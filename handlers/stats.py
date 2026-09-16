@@ -3,6 +3,7 @@ arrears, absen coverage, 7-day activity bars."""
 from __future__ import annotations
 
 import html
+import logging
 import re
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
@@ -14,6 +15,8 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 import sheets
 import usage
 import users
+
+log = logging.getLogger(__name__)
 
 ADMIN_ID = 2061872254
 
@@ -53,18 +56,34 @@ def _in_period(ts: str, days: int) -> bool:
         return True
 
 
+_HARD_SPLIT = 3800  # single oversized line: force-cut, keep under Telegram 4096 cap
+
+
 def _chunks(lines: list[str], limit: int = _MAX_MSG) -> list[str]:
-    """Split lines into ≤limit-char messages; never splits a line (keeps HTML tags whole)."""
+    """Split lines into ≤limit-char messages; tries to keep lines whole (HTML tags
+    intact), but force-splits any single line longer than the limit using a safe
+    break near a space so a growing report can't overflow Telegram's 4096 cap."""
     out: list[str] = []
     cur: list[str] = []
     n = 0
     for line in lines:
+        while len(line) + 1 > limit:
+            hard = min(_HARD_SPLIT, len(line))
+            cut = line.rfind(" ", 0, hard)
+            if cut <= 0:
+                cut = hard
+            if cur:
+                out.append("\n".join(cur))
+                cur, n = [], 0
+            out.append(line[:cut])
+            line = line[cut:].lstrip()
         w = len(line) + 1
-        if cur and n + w > limit:
-            out.append("\n".join(cur))
-            cur, n = [], 0
-        cur.append(line)
-        n += w
+        if line:
+            if cur and n + w > limit:
+                out.append("\n".join(cur))
+                cur, n = [], 0
+            cur.append(line)
+            n += w
     if cur:
         out.append("\n".join(cur))
     return out
@@ -74,6 +93,8 @@ def _activity_bars(data: list[dict]) -> list[str]:
     """Last 7 WIB days as text bars (cap 40 chars)."""
     by_day: Counter = Counter()
     for e in data:
+        if not isinstance(e, dict):
+            continue
         try:
             d = datetime.fromisoformat(str(e.get("ts", "")))
         except (ValueError, TypeError):
@@ -151,18 +172,34 @@ async def _weekly_sections(sc, names: list[str]) -> tuple[list, list]:
 
 
 def _filter_period(data: list[dict], days: int) -> list[dict]:
-    return [e for e in data if _in_period(str(e.get("ts", "")), days)] if days else data
+    if not days:
+        return [e for e in data if isinstance(e, dict)]
+    out: list[dict] = []
+    for e in data:
+        if not isinstance(e, dict):
+            log.warning("skip corrupt usage entry: %r", e)
+            continue
+        if _in_period(str(e.get("ts", "")), days):
+            out.append(e)
+    return out
 
 
 def _build_report(names: list[str], data: list[dict], pdata: list[dict], days: int,
                   per_menu: Counter, per_user: dict, last_ts: dict,
                   matriks: list, arrears: list, cov: dict | None) -> list[str]:
     """Render the full report as HTML lines (chunked later by _chunks)."""
-    ever = {e["name"] for e in data}
+    ever = {e.get("name") for e in data if isinstance(e, dict) and isinstance(e.get("name"), str)}
     if days:
         weeks = max(1, round(days / 7))
     else:
-        tss = [datetime.fromisoformat(str(e["ts"])) for e in data if e.get("ts")]
+        tss = []
+        for e in data:
+            if not isinstance(e, dict):
+                continue
+            try:
+                tss.append(datetime.fromisoformat(str(e.get("ts"))))
+            except (ValueError, TypeError, KeyError):
+                continue
         span = (datetime.now(sheets.WIB) - min(tss)).days if tss else 0
         weeks = max(1, round(span / 7))
     thr = 3 * weeks
@@ -243,12 +280,19 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     data, _, _ = usage.stats()
     pdata = _filter_period(data, days)
 
-    per_menu = Counter(e["action"] for e in pdata)
-    per_user = defaultdict(Counter)
+    per_menu = Counter(e.get("action", "?") for e in pdata if isinstance(e, dict))
+    per_user: dict[str, Counter] = defaultdict(Counter)
     last_ts: dict[str, str] = {}
     for e in pdata:
-        per_user[e["name"]][e["action"]] += 1
-        last_ts[e["name"]] = e["ts"]
+        if not isinstance(e, dict):
+            log.warning("skip corrupt usage entry: %r", e)
+            continue
+        name, action = e.get("name"), e.get("action")
+        if not isinstance(name, str) or not isinstance(action, str):
+            log.warning("skip corrupt usage entry: %r", e)
+            continue
+        per_user[name][action] += 1
+        last_ts[name] = str(e.get("ts", ""))
 
     sc = context.bot_data["sheets"]
     matriks: list = []
@@ -270,7 +314,9 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await busy.delete()
     except Exception:
         pass
-    for part in _chunks(L):
+    chunks = _chunks(L)
+    for i, part in enumerate(chunks, 1):
+        log.info("stats chunk %d/%d len=%d", i, len(chunks), len(part))
         await update.message.reply_text(part, parse_mode=ParseMode.HTML)
 
 

@@ -1342,8 +1342,8 @@ class SheetsClient:
                     log.exception("sheets call timed out")
                     try:
                         await fut
-                    except Exception:
-                        pass
+                    except BaseException:
+                        pass  # drain: swallow CancelledError/anything from the kept-running thread
                     raise SheetsError("Google Sheets timeout (60 detik) — coba lagi.") from exc
             except SheetsError:
                 raise
