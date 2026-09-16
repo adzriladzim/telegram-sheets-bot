@@ -8,7 +8,7 @@ import asyncio
 import re
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 HANDLERS = Path(__file__).parent / "handlers"
 
@@ -83,6 +83,8 @@ A = {
         "• Fasil: {html.escape(rec.facilitator)}",
     ],
     "start.py": [
+        "html.escape(update.effective_user.first_name",
+        "html.escape(facilitator)",
         "HELP.format(wib=wib)",  # only dynamic input is int-formatted slots
     ],
     "reminder.py": [
@@ -98,7 +100,7 @@ for fname, needles in A.items():
     src = (HANDLERS / fname).read_text(encoding="utf-8")
     for n in needles:
         assert n in src, f"{fname}: missing escaped site {n!r}"
-    if fname not in ("start.py", "heartbeat.py"):
+    if fname not in ("heartbeat.py",):
         assert re.search(r"\bimport html\b", src), f"{fname}: missing import html"
 print("OK Part A: grep manifest — all %d escape sites present" % sum(len(v) for v in A.values()))
 
@@ -243,6 +245,8 @@ async def sim_cancel():
 
 async def sim_start():
     import handlers.start as h
+    out = []
+    # /help (static HELP, dynamic wib slots)
     bot = CaptureBot()
     ctx = SimpleNamespace(bot=bot, bot_data={"cfg": SimpleNamespace(reminder_slots=[(21, 0), (12, 0), (20, 0)])})
     upd = SimpleNamespace(effective_chat=SimpleNamespace(id=1))
@@ -250,7 +254,27 @@ async def sim_start():
     _, t, k = bot.sent[0]
     assert k.get("parse_mode") == "HTML"
     fake_parse(t)
-    return [t]
+    out.append(t)
+    # /start with hostile first name, registered and unregistered
+    for first_name, facilitator in ((E, None), (I, E)):
+        msg = Capture()
+        upd = SimpleNamespace(
+            effective_chat=SimpleNamespace(id=1),
+            effective_user=SimpleNamespace(first_name=first_name),
+            message=msg,
+        )
+        ctx = SimpleNamespace(bot=SimpleNamespace(
+            send_chat_action=lambda *a, **k: asyncio.sleep(0)))
+        with patch("handlers.start.users.get", return_value=facilitator), \
+             patch("handlers.start.reminder.register_chat", new=AsyncMock()), \
+             patch("handlers.start.heartbeat.register_chat", new=AsyncMock()):
+            await h.start_cmd(upd, ctx)
+        assert msg.html and not msg.plain, "start: every send must be HTML mode"
+        for m in msg.html:
+            fake_parse(m)
+            assert "<b>TelefasilBot</b>" in m, "start: markup must be present for bold render"
+            out.append(m)
+    return out
 
 
 async def sim_reminder():

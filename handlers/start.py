@@ -1,6 +1,8 @@
 """/start and /help."""
 from __future__ import annotations
 
+import html
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
@@ -58,11 +60,11 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if facilitator:
         await reminder.register_chat(chat_id, context)  # (re)schedule this user's reminder job
         await heartbeat.register_chat(chat_id, context)  # (re)schedule daily 05:00 WIB heartbeat
-    first = update.effective_user.first_name or "Kak"
+    first = html.escape(update.effective_user.first_name or "Kak")
     status = (
-        f"Terdaftar sebagai: {facilitator}"
+        f"Terdaftar sebagai: {html.escape(facilitator)}"
         if facilitator
-        else "⚠️ Belum terdaftar.\nKetik /register <nama fasilitator> dulu, contoh:\n/register Adzril Adzim Hendrynov"
+        else "⚠️ Belum terdaftar.\nKetik /register &lt;nama fasilitator&gt; dulu, contoh:\n/register Adzril Adzim Hendrynov"
     )
     await update.message.reply_text(
         f"👋 Halo {first}!\n\n"
@@ -72,6 +74,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Tekan tombol di bawah atau kirim /zoom untuk mulai mencatat kelas "
         f"hari ini. 👇",
         reply_markup=_keyboard(),
+        parse_mode=ParseMode.HTML,
     )
 
 
