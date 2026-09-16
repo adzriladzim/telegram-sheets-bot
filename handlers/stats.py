@@ -1,9 +1,10 @@
-"""/stats [detail] [minggu|bulan|semua] — admin only.
+"""/stats [ringkas|detail] [minggu|bulan|semua] — admin only.
 
-Default = executive summary (1 bubble): active roster count, arrears +
-logged %, 🔴 perlu perhatian (top tunggakan + tertua), ✅ beres semua.
-`/stats detail` = full roster, kelengkapan matriks, tunggakan per fasil,
-absen coverage (macet saja), 7-day activity bars.
+Default (dan alias `/stats detail`) = laporan lengkap 8 blok berurutan:
+(1) ringkasan eksekutif, (2) Per menu, (3) Roster semua fasil,
+(4) Jarang pakai, (5) Belum pernah pakai, (6) Tunggakan per fasil,
+(7) Cakupan absen macet saja, (8) Aktivitas 7 hari.
+`/stats ringkas` = hanya blok (1) ringkasan eksekutif.
 """
 from __future__ import annotations
 
@@ -37,6 +38,7 @@ PERIODS = {
 _PERIOD_LABEL = {7: "7 hari terakhir", 30: "30 hari terakhir", 0: "sepanjang waktu"}
 
 _DETAIL_WORDS = {"detail", "rinci", "full", "lengkap"}
+_RINGKAS_WORDS = {"ringkas", "ringkasan", "singkat", "short", "summary", "sum"}
 
 _MAX_MSG = 3500  # Telegram caps at 4096 UTF-8 *bytes*; margin for emoji
 _TOTAL_PERTEMUAN = 16
@@ -217,17 +219,16 @@ def _log_pct(matriks: list) -> int:
     return round(logged / tot * 100) if tot else 0
 
 
-def _build_summary(names: list[str], data: list[dict], pdata: list[dict], days: int,
-                   per_menu: Counter, per_user: dict, last_ts: dict,
-                   matriks: list, arrears: list, cov: dict | None) -> list[str]:
-    """Executive summary — 1 bubble (chunked only if extreme)."""
+def _exec_lines(names: list[str], pdata: list[dict], days: int,
+                per_user: dict, matriks: list, arrears: list,
+                cov: dict | None) -> list[str]:
+    """Blok 1 — ringkasan eksekutif (tanpa bar aktivitas, itu blok 8)."""
     active = sum(1 for n in names if sum(per_user[n].values()) > 0)
     by_name: dict[str, list] = defaultdict(list)
     for name, c, label, pn, cmpd in arrears:
         by_name[name].append((c.code, label, pn, cmpd))
 
     L = [
-        "📊 <b>STATS BOT</b> — ringkas",
         f"👥 Aktif {active}/{len(names)} fasil · ⚡ {len(pdata)} aksi ({_PERIOD_LABEL[days]})",
         f"⚡ Sudah-log {_log_pct(matriks)}% kelas · ⏳ lewat {len(arrears)}",
     ]
@@ -257,24 +258,55 @@ def _build_summary(names: list[str], data: list[dict], pdata: list[dict], days: 
         L.append(line)
     else:
         L.append("• (tidak ada)")
-    L += ["", "<b>Aktivitas 7 hari</b>"]
-    L += _activity_bars(data)
     return L
+
+
+def _rare_facil(names: list[str], data: list[dict], per_user: dict,
+                days: int) -> tuple[list, int]:
+    """(rare, thr) — fasil dengan 0 < total aksi < 3×minggu dalam periode."""
+    if days:
+        weeks = max(1, round(days / 7))
+    else:
+        tss: list = []
+        for e in data:
+            if not isinstance(e, dict):
+                continue
+            try:
+                tss.append(datetime.fromisoformat(str(e.get("ts", ""))))
+            except (ValueError, TypeError):
+                continue
+        span = (datetime.now(sheets.WIB) - min(tss)).days if tss else 0
+        weeks = max(1, round(span / 7))
+    thr = 3 * weeks
+    rare = [n for n in names if 0 < sum(per_user[n].values()) < thr]
+    return rare, thr
+
+
+def _build_summary(names: list[str], data: list[dict], pdata: list[dict], days: int,
+                   per_menu: Counter, per_user: dict, last_ts: dict,
+                   matriks: list, arrears: list, cov: dict | None) -> list[str]:
+    """`/stats ringkas` — hanya blok 1: ringkasan eksekutif."""
+    return ["📊 <b>STATS BOT</b> — ringkas"] + _exec_lines(
+        names, pdata, days, per_user, matriks, arrears, cov)
 
 
 def _build_detail(names: list[str], data: list[dict], pdata: list[dict], days: int,
                   per_menu: Counter, per_user: dict, last_ts: dict,
                   matriks: list, arrears: list, cov: dict | None) -> list[str]:
-    """Full report — roster, kelengkapan, tunggakan per fasil, coverage macet."""
+    """Lengkap (default & /detail) — 8 blok: ringkasan, per menu, roster,
+    jarang pakai, belum pernah, kelengkapan, tunggakan, cakupan macet, aktivitas."""
     ever = {e.get("name") for e in data if isinstance(e, dict) and isinstance(e.get("name"), str)}
     never = [n for n in names if n not in ever]
+    rare, thr = _rare_facil(names, data, per_user, days)
 
     L = [
-        "📊 <b>STATS BOT</b> — detail",
+        "📊 <b>STATS BOT</b> — lengkap",
         f"👥 {len(names)} terdaftar | ⚡ {len(pdata)} aksi ({_PERIOD_LABEL[days]})",
         "",
-        "<b>Per menu</b>",
+        "<b>Ringkasan eksekutif</b>",
     ]
+    L += _exec_lines(names, pdata, days, per_user, matriks, arrears, cov)
+    L += ["", "<b>Per menu</b>"]
     if per_menu:
         for m in ACT_ORDER + sorted(set(per_menu) - set(ACT_ORDER)):
             if m in per_menu:
@@ -288,6 +320,9 @@ def _build_detail(names: list[str], data: list[dict], pdata: list[dict], days: i
         acts = " ".join(f"{ACT_LABEL.get(k, k)} {c.get(k, 0)}" for k in ACT_ORDER)
         ts = html.escape(last_ts.get(n, "")[:16].replace("T", " ")) or "—"
         L.append(f"• {html.escape(n)} — {acts}, terakhir {ts}")
+    if rare:
+        L += ["", f"<b>Jarang pakai</b> ({_PERIOD_LABEL[days]}, kurang dari {thr} aksi)"]
+        L += [f"• {html.escape(n)} ({sum(per_user[n].values())} aksi)" for n in sorted(rare)]
     if never:
         L += ["", f"<b>Belum pernah pakai ({len(never)})</b>",
               "• " + ", ".join(html.escape(n) for n in never)]
@@ -328,11 +363,20 @@ def _build_detail(names: list[str], data: list[dict], pdata: list[dict], days: i
     return L
 
 
-def _parse_args(args: list[str] | None) -> tuple[bool, int]:
+def _parse_args(args: list[str] | None) -> tuple[str, int]:
+    """(mode, days); mode: \"ringkas\" | \"lengkap\" (detail = alias lengkap)."""
     args = args or []
-    detail = any(a.strip().casefold() in _DETAIL_WORDS for a in args)
-    period_arg = next((a for a in args if a.strip().casefold() not in _DETAIL_WORDS), None)
-    return detail, _period_days(period_arg)
+    mode = "lengkap"
+    period_arg = None
+    for a in args:
+        k = a.strip().casefold()
+        if k in _RINGKAS_WORDS:
+            mode = "ringkas"
+        elif k in _DETAIL_WORDS:
+            mode = "lengkap"
+        else:
+            period_arg = a
+    return mode, _period_days(period_arg)
 
 
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -345,7 +389,7 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         pass
     busy = await update.message.reply_text("⏳ Hitung statistik...")
-    detail, days = _parse_args(context.args)
+    mode, days = _parse_args(context.args)
     all_users = users.registry().all()
     names = sorted(all_users.values())
 
@@ -379,12 +423,12 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except sheets.SheetsError:
         cov = None
 
-    if detail:
-        L = _build_detail(names, data, pdata, days, per_menu, per_user, last_ts,
-                          matriks, arrears, cov)
-    else:
+    if mode == "ringkas":
         L = _build_summary(names, data, pdata, days, per_menu, per_user, last_ts,
                            matriks, arrears, cov)
+    else:
+        L = _build_detail(names, data, pdata, days, per_menu, per_user, last_ts,
+                          matriks, arrears, cov)
 
     try:
         await busy.delete()

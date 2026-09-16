@@ -1,4 +1,5 @@
-"""Offline stub — /stats redesign + absen coverage pengisi-row fix. No live creds.
+"""Offline stub — /stats redesign (8-block default, ringkas=blok1) + coverage
+pengisi-row fix. No live creds.
 
 Run: py verify_stats_redesign.py   (expect: ALL PASS)
 
@@ -6,11 +7,13 @@ Checks:
   1. _absen_coverage skips the filler-name header row (WDC05-like block): a
      row with names only (no NIM/Nama) must NOT count as a filled meeting,
      and a block with only a pengisi name (no student status) stays 0/16.
-  2. _parse_args: 'detail' -> detail-mode flag + period.
-  3. _build_summary renders ringkas sections (Aktif, Sudah-log, Perlu
-     perhatian, Beres semua) with escaped names.
-  4. _build_detail renders arrears grouped per fasil + coverage macet only.
-  5. _chunks keeps every summary/detail chunk <=3500 bytes & HTML-parseable.
+  2. _parse_args: 'ringkas' -> ringkas mode, 'detail' -> lengkap, none -> lengkap.
+  3. _build_summary (ringkas) renders ONLY block 1 (Ringkasan eksekutif) —
+     no Per menu/Roster/Jarang/Belum pernah/Aktivitas.
+  4. _build_detail (default) renders semua 8 blok berurutan: Ringkasan
+     eksekutif, Per menu, Roster semua fasil, Jarang pakai, Belum pernah
+     pakai, Kelengkapan/Tunggakan per fasil, Cakupan macet, Aktivitas 7 hari.
+  5. _chunks keeps every ringkas+detail chunk <=3500 bytes & HTML-parseable.
 """
 from __future__ import annotations
 
@@ -117,13 +120,15 @@ check("coverage DS01 = empty (name-only row not a meeting)",
       cover.get("DS01") in (None, set()), f"got {cover.get('DS01')!r}")
 
 # ---------- 2. arg parse ----------
-d, days = stats._parse_args(["detail"])
-check("_parse_args detail -> detail", d is True, f"got {d}")
-d, days = stats._parse_args(["minggu"])
-check("_parse_args period default not detail", d is False and days == 7, f"got {d},{days}")
-d, days = stats._parse_args(["detail", "bulan"])
-check("_parse_args detail+bulan", d is True and days == 30, f"got {d},{days}")
-check("_parse_args none", stats._parse_args(None) == (False, 7), f"got {stats._parse_args(None)}")
+m, days = stats._parse_args(["detail"])
+check("_parse_args detail -> lengkap", m == "lengkap", f"got {m!r}")
+m, days = stats._parse_args(["ringkas"])
+check("_parse_args ringkas -> ringkas", m == "ringkas", f"got {m!r}")
+m, days = stats._parse_args(["detail", "bulan"])
+check("_parse_args detail+bulan (alias default)", m == "lengkap" and days == 30, f"got {m},{days}")
+m, days = stats._parse_args(["minggu"])
+check("_parse_args period default lengkap", m == "lengkap" and days == 7, f"got {m},{days}")
+check("_parse_args none", stats._parse_args(None) == ("lengkap", 7), f"got {stats._parse_args(None)}")
 
 # ---------- 3+4. render ----------
 names = ["Adzril", "Budi", "Citra", "<Bold>"]
@@ -149,21 +154,37 @@ cov = {"WDC05": {1, 2}, "DS01": set(), "Arch2": set()}
 S = stats._build_summary(names, data, pdata, 7, per_menu, per_user, last_ts,
                          matriks, arrears, cov)
 S_JOIN = "\n".join(S)
-check("summary has Aktif header", "Aktif 2/4 fasil" in S_JOIN, S_JOIN.splitlines()[1] if len(S_JOIN) else "")
-check("summary has Sudah-log %", "Sudah-log 50% kelas" in S_JOIN, f"got {S_JOIN.splitlines()[2] if len(S)>2 else ''!r}")
-check("summary has Perlu perhatian + tertua",
+check("ringkas has Aktif header", "Aktif 2/4 fasil" in S_JOIN, S_JOIN.splitlines()[1] if len(S_JOIN) else "")
+check("ringkas has Sudah-log %", "Sudah-log 50% kelas" in S_JOIN, f"got {S_JOIN.splitlines()[2] if len(S)>2 else ''!r}")
+check("ringkas has Perlu perhatian + tertua",
       "Perlu perhatian" in S_JOIN and "tertua 08/09" in S_JOIN, S_JOIN)
-check("summary Beres semua count", "Beres semua</b> (3" in S_JOIN, S_JOIN.splitlines()[-4] if len(S) > 4 else "")
-check("summary escaped name", "&lt;Bold&gt;" in S_JOIN and "<Bold>" not in S_JOIN, S_JOIN)
+check("ringkas Beres semua count", "Beres semua</b> (3" in S_JOIN, S_JOIN.splitlines()[-4] if len(S) > 4 else "")
+check("ringkas escaped name", "&lt;Bold&gt;" in S_JOIN and "<Bold>" not in S_JOIN, S_JOIN)
+check("ringkas = ONLY block 1 (no detail blocks)",
+      "Per menu" not in S_JOIN and "Roster semua fasil" not in S_JOIN
+      and "Jarang pakai" not in S_JOIN and "Belum pernah pakai" not in S_JOIN
+      and "Aktivitas 7 hari" not in S_JOIN and "Cakupan absen" not in S_JOIN, S_JOIN)
 
 D = stats._build_detail(names, data, pdata, 7, per_menu, per_user, last_ts,
                         matriks, arrears, cov)
 D_JOIN = "\n".join(D)
-check("detail has roster", "Roster semua fasil" in D_JOIN, D_JOIN[:80])
-check("detail arrears grouped + date once",
+BLOCKS = ["Ringkasan eksekutif", "Per menu", "Roster semua fasil", "Jarang pakai",
+          "Belum pernah pakai", "Tunggakan per fasil", "Cakupan absen (macet saja)",
+          "Aktivitas 7 hari"]
+missing = [b for b in BLOCKS if b not in D_JOIN]
+check("default memuat 8 blok berurutan", not missing, f"missing={missing}")
+check("default header terdaftar|aksi", "4 terdaftar | ⚡ 3 aksi" in D_JOIN, D_JOIN.splitlines()[1] if len(D) > 1 else "")
+check("default Jarang pakai + threshold", "Jarang pakai" in D_JOIN and "kurang dari 3 aksi" in D_JOIN, D_JOIN)
+check("default rare list Adzril/Budi", "Adzril (2 aksi)" in D_JOIN and "Budi (1 aksi)" in D_JOIN, D_JOIN)
+check("default belum pernah (Citra,<Bold>)", "Belum pernah pakai (2)" in D_JOIN and "Citra, &lt;Bold&gt;" in D_JOIN, D_JOIN)
+check("default arrears grouped + date once",
       "ILaw1,AsDs5 (2)" in D_JOIN and "📅 Senin 8 September 2026: ILaw1" in D_JOIN, D_JOIN)
-check("detail coverage macet only (DS01/Arch2 listed, WDC05 not)",
+check("default coverage macet only (DS01/Arch2 listed, WDC05 not)",
       "DS01: 0/16" in D_JOIN and "Arch2: 0/16" in D_JOIN and "WDC05" not in D_JOIN, D_JOIN)
+check("default 8 blok berurutan (ringkasan dulu, aktivitas terakhir)",
+      D_JOIN.index("Ringkasan eksekutif") < D_JOIN.index("Per menu")
+      and D_JOIN.index("Aktivitas 7 hari") > D_JOIN.index("Cakupan absen"),
+      D_JOIN[:60] + "..." + D_JOIN[-60:])
 
 # ---------- 5. chunk safety ----------
 TAG = re.compile(r"</?[a-zA-Z][^>]*>")
