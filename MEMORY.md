@@ -1,7 +1,7 @@
 # MEMORY — telegram-sheets-bot (TelefasilBot)
 
 > Per-project memory. Read at cold session start. Append-only.
-> Updated: 2026-09-15
+> Updated: 2026-09-16 (HEAD e6e45e6 — stats crash guards: chunk hard-split 3800, corrupt entry skip; Railway deploy MANUAL)
 
 ## What
 Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, rekap kehadiran, backup, cancel kelas langsung ke Google Sheets. Multi-user (satu bot, tiap fasil lihat jadwal sendiri). Bot: [@telefasil_bot](https://t.me/telefasil_bot).
@@ -30,6 +30,7 @@ Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, 
 
 ## Gotchas
 - `VOLUME` instruction → Railway build fail. Pakai platform volume.
+- Validator Railway juga flag token `VOLUME`/`volume` di KOMENTAR Dockerfile (error "at Line 15"). JANGAN tulis kata `volume` di file Dockerfile sama sekali (a022e30).
 - `.dockerignore` exclude `.env`, `secrets/`, `data/`, `*.log`, `.git/` — credentials/data tak masuk image. Verifikasi tiap ubah Dockerfile.
 - Data dobel saat retry submit: bot tulis ke baris kosong pertama; hapus duplikat manual.
 - **JANGAN jalankan bot lokal sambil Railway aktif** → dua poller → Telegram 409 Conflict, pesan acak hilang.
@@ -126,3 +127,109 @@ Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, 
   - Optional: 16 bare `except:` → `except Exception` (best-effort UI path tetap), hapus dead code `update_chat_id` (backup.py).
 - **Verifikasi:** `py -m compileall -q .` OK. Stub lama `verify_725423d.py` 18/18 PASS (regresi bersih). Stub baru `verify_s3.py` 15/15 PASS (guard grid backup/cancel + 7 OOB handler checks via FakeUpdate/FakeCtx, tanpa creds).
 - No deploy. Working tree: +`verify_s3.py` (test stub, uncommitted seperti pola sblmnya).
+
+## [2026-09-15] S3 bounds+grid fix SHIPPED 6e952b7 (725423d..6e952b7)
+- **SHIPPED:** commit `6e952b7` pushed `725423d..6e952b7`. HEAD = 6e952b7. Railway auto-deploy.
+- **Isi:** (1) `_guard_grid` di `_append_backup_record` (J) / `_append_cancel_record` (I) — tab penuh/salah gagal bersih, tak tulis di luar grid; (2) bounds check callback idx → 7 path OOB handler (`log.pick_class`, `rekap.pick_class/pick_sesi/pick_peran`, `cancel.pick_class`, `backup.pick_class`, `absen.toggle_check`) — OOB → pesan expired + END (sesi/peran re-ask KB), tak IndexError; (3) 16 bare `except:` → `except Exception` (path UI best-effort tetap); (4) dead code `update_chat_id` (backup.py) dihapus; (5) fix `rks:biasa` → `rks:0` (tombol "Kelas Biasa" mati).
+- **Verifikasi (offline, tanpa creds):** `verify_725423d.py` **18/18 PASS** (regresi bersih) + `verify_s3.py` **15/15 PASS** (grid guard backup/cancel + 7 OOB handler). `py -m compileall -q .` OK.
+- **NEXT (user):** cek Railway ACTIVE + tes live SEMUA fitur di @telefasil_bot.
+- **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar → STOP, delegate vision agent.
+
+## [2026-09-15] Guard longgar + escape apostrof + usage fail-open + tombol retry — 892b39c (6e952b7..892b39c)
+- **SHIPPED:** commit `892b39c` pushed `6e952b7..892b39c`. HEAD = 892b39c. Railway auto-deploy. Review (lanjutan S3/UX).
+- **Isi:**
+  1. **Guard baris longgar** — guard baris kosong/pendek dilonggarkan (jangan reject baris valid yang cuma kurang 1-2 cell trailing; tetap aman utk baris benar-benar kosong). Lanjutan fix `IndexError` 5e7e9ed.
+  2. **Escape apostrof** — input user dengan apostrof (`'`) di-escape sebelum tulis/query Sheets (hindari error formula/parse + input terpotong).
+  3. **Usage fail-open** — path logging `usage.py` dibuat fail-open: gagal tulis usage TIDAK boleh menggagalkan/memblok aksi bot utama.
+  4. **Tombol retry** — tombol retry ditambahkan di UI saat aksi gagal (user bisa ulang tanpa restart flow).
+- **Verifikasi:** `py -m compileall -q .` + stub offline (tanpa creds).
+- **NEXT (user):** (1) cek Railway deploy **ACTIVE**; (2) tes `/zoom` submit di @telefasil_bot; (3) tes `/absen`.
+- **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar → STOP, delegate vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-15] Fix lookup zoom kelas backup — rombel-match 4e9e344 (a022e30..4e9e344)
+> **SHIPPED:** commit `4e9e344` pushed `a022e30..4e9e344`. HEAD = 4e9e344. **Railway redeploy needed (auto-deploy belum pasti).**
+
+- **AKAR BUG:** `_fetch_backup_classes` lookup master by Kode saja → kode yang muncul di >1 RomBel (col 8) selalu ambil baris pertama → zoom kelas backup salah.
+- **FIX 1 — rombel-match** (`sheets.py` `_fetch_backup_classes` ~L810-838): kumpulkan SEMUA master row dgn kode sama (casefold); `room_key = _normalize(row[7])` = backup Col H; pilih master row yang `_normalize(mr[COL_ROMBEL]) == room_key`; tanpa match → `candidates[0]` (fallback lama, perilaku sengaja dipertahankan).
+- **FIX 2 — keterangan fallback master** (`sheets.py` ~L853): `keterangan = (row[9] backup Catatan / Col J) or ket_master` → **catatan backup MENANG**, master Keterangan cuma fallback.
+- **FIX 3 — zoom_label** (`ClassEntry.zoom_label`, `sheets.py` L107-116): priority `Keterangan` regex `Zoom\s*(\d+)` (case-insensitive) → `Zoom {n}`; fallback `Nomor Zoom`; kosong → `""`. Link di Keterangan diabaikan. Efek: zoom yang cuma ada di master Keterangan (col 12) kini terbaca utk kelas backup.
+- **KASUS NYATA:** **Ali Morteza** — zoom **28 → 40** (rombel-match: kode sama, baris pertama = RomBel 3 → Zoom 28; baris match Col H = RomBel 5 → Zoom 40).
+- **VERIFIKASI:** stub `verify_backup_master.py` **5/5 PASS** (1 rombel match, 2 fallback first, 3 zoom dari Keterangan, 4 catatan backup menang, 5 fallback Nomor Zoom) + `py -m compileall -q .` OK. Offline, tanpa creds.
+- **NEXT (user):** (1) deploy `4e9e344` di Railway → cek ACTIVE; (2) tes live backup: pilih kode kelas backup dengan RomBel spesifik di `/absen` (picker 🔄) → verifikasi zoom label benar.
+- **⚠️ SKEW GIT:** entri `892b39c` mencatat HEAD 892b39c; range push tercatat `a022e30..4e9e344` → kemungkinan rebase/force-push atau origin/main reset. **Verifikasi `git log --oneline -5` + `git status` sebelum asumsi.**
+- **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar → STOP, delegate vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-15] Railway deploy state — ACTIVE = a022e30; 4e9e344 BELUM deploy
+- **RAILWAY ACTIVE (user screenshot):** deployment = **a022e30** "fix: strip VOLUME token from Dockerfile comments". Service **Online**, volume attached, trial **26 hari** tersisa, region **US West**.
+- **4e9e344 (zoom backup rombel-match) BELUM deploy:** Railway masih jalan `a022e30` — **auto-deploy off / deploy manual trigger**. Perlu klik **Deploy Latest Commit** di Railway lagi.
+- **HEAD git vs Railway:** origin/main HEAD = `4e9e344`; Railway ACTIVE = `a022e30`. Gap 1 commit.
+- **NEXT (user):** (1) Railway → Deploy Latest Commit → cek ACTIVE jadi `4e9e344`; (2) tes backup zoom label (Ali Morteza: zoom harus **40**, bukan 28).
+
+## [2026-09-16] README rewrite 701 baris — 8a1fa40 (1347178..8a1fa40)
+> **SHIPPED:** commit `8a1fa40` pushed `1347178..8a1fa40`. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE = 8a1fa40.**
+
+- **README ditulis ulang total:** 701 baris (sebelumnya tipis), TOC 10 bagian — panduan umum (fasil: Mulai Cepat, Cara Pakai per Fitur, Notifikasi, Bukti Foto, Fitur Pintar) + teknis (admin/dev: Prasyarat, BotFather, Google SA, share sheets/Drive, .env lengkap, run lokal Win/Linux/macOS, deploy Railway, Troubleshooting, Struktur Project, Catatan Teknis).
+- **Rekap 16 commit sesi diminta user** — 16 commit sesi (mulai a022e30 → 8a1fa40) di-rekap & disajikan ke user.
+- **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE jadi **8a1fa40**; (2) tes live di @telefasil_bot (verifikasi panduan sesuai perilaku nyata); (3) **share panduan ke grup fasil** (link t.me bot / file README).
+- **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar → STOP, delegate vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-16] Reminder multi-slot SHIPPED e2f45ce (4e9e344..e2f45ce)
+> **SHIPPED:** commit `e2f45ce` pushed `4e9e344..e2f45ce`. HEAD = e2f45ce. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit.**
+
+- **Isi — reminder 3 slot/hari:**
+  - Env **`REMINDER_TIMES="21,5,13"` (UTC)** = **04:00, 12:00, 20:00 WIB** (21+7=04 same day, 5+7=12, 13+7=20).
+  - **Slot pagi (04:00 WIB):** kirim jadwal PENUH (semua kelas).
+  - **Slot siang/malam (12:00 & 20:00 WIB):** hanya kelas **belum di-log** (skip kalau semua sudah beres).
+  - **Job name unik per slot** (mis. `reminder:04` / `reminder:12` / `reminder:20`) — PTB JobQueue tak bentrok, stop/restart per-slot bukan all.
+  - **Backward compat env lama:** `REMINDER_TIMES` kosong/tak ada → perilaku lama (single 05:00 WIB jadwal penuh) tetap jalan.
+  - **Heartbeat TIDAK disentuh** (job 05:00 WIB tetap).
+- **Verifikasi: 22 checks PASS** (stub offline, tanpa creds).
+- **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE jadi **e2f45ce**; (2) tes live: reminder pagi kirim jadwal penuh, siang/malam cuma kelas belum di-log; (3) cek heartbeat tetap jalan.
+- **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar → STOP, delegate vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-16] Drive scope fix — 403 upload foto/doc → cccfd0a (a933f96..cccfd0a)
+> **SHIPPED:** commit `cccfd0a` pushed `a933f96..cccfd0a`. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE = cccfd0a.**
+
+- **Isi:** `sheets.py` L55-58 `SCOPES` — `https://www.googleapis.com/auth/drive.file` → `https://www.googleapis.com/auth/drive` (full Drive scope).
+- **AKAR 403 (bukan permission SA):** scope `drive.file` hanya mengizinkan akses file/folder yang DIBUAT bot sendiri. Folder Bukti existing (dibuat manual oleh user/admin) DITOLAK — Service Account sebagai **Editor** pun tak bisa tulis. Gejala: upload foto/dokumen 403 walau SA sudah di-share Editor.
+- **Fix = scope saja, TANPA re-auth** (service account, bukan OAuth user consent).
+- **Pelajaran:** `drive.file` aman tapi tak bisa sentuh folder pre-existing. Kalau bot menulis ke folder yang dibuat manual → WAJIB scope `drive` penuh, atau buat folder lewat bot sendiri.
+- **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE jadi **cccfd0a**; (2) tes upload foto + dokumen di @telefasil_bot.
+- **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar → STOP, delegate vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-16] Absen: nama pengisi di header kolom + stale guard → 88d1fee (1260db5..88d1fee)
+> **SHIPPED:** commit `88d1fee` pushed `1260db5..88d1fee`. HEAD = 88d1fee. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE = 88d1fee.**
+
+- **Isi — nama pengisi di header kolom pertemuan:**
+  - Sel header kolom pertemuan (dulu berisi **angka** pertemuan) kini diisi **nama pengisi** — konvensi sheet yang dipakai sheet absen. Multi-blok: ditulis ke SEMUA blok pertemuan yang match (bukan hanya blok pertama).
+  - Reply konfirmasi absen menyertakan **+Pengisi** (nama pengisi yang tercatat).
+- **Stale guard + hapus tombol (stop double-tap):**
+  - Guard state **stale** pada callback absen → cegah **double-tap** memicu `KeyError` (state/sesi sudah tidak valid saat tombol kedua ditekan).
+  - Tombol dihapus setelah ditekan → tap kedua tak bisa diproses (bukan cuma di-guard).
+- **Verifikasi:** stub **15/15 PASS** (offline, tanpa creds).
+- **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE jadi **88d1fee**; (2) tes `/absen` di @telefasil_bot; (3) cek **nama pengisi tampil di header kolom pertemuan**.
+- **⚠️ SKEW CATATAN:** range push tercatat `1260db5..88d1fee` — `1260db5` tidak muncul di entri memory sebelumnya (entri terakhir menyebut `cccfd0a`/`a933f96..cccfd0a`). Indikasi rebase/force-push atau commit perantara tak tercatat. Verifikasi `git log --oneline -8` + `git status` di sesi code berikutnya sebelum asumsi.
+- **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar → STOP, delegate vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-16] RACE-1 orphan fix SHIPPED e686cec (e720c7c..e686cec)
+> **SHIPPED:** commit `e686cec` pushed `e720c7c..e686cec`. HEAD = e686cec. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE = e686cec.**
+
+- **Isi — RACE-1 orphan fix:**
+  - `_run` shield + drain **under lock** (race: task orphaned/duplicate saat lock timeout/exception — single writer dilanggar).
+  - Stub **PASS** (offline, tanpa creds) — pola verifikasi stub existing.
+- **Follow-up dicatat:** drain **unbounded** — cap jumlah drain selama lock (opsional, nanti).
+- **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE jadi **e686cec**; (2) tes live minimal path gspread write (log/rekap/absen/backup/cancel).
+- **⚠️ SKEW GIT:** range `e720c7c..e686cec` — `e720c7c` tak muncul di entri memory sebelumnya (terakhir `1260db5..88d1fee`). Indikasi rebase/force-push atau perantara tak tercatat. Verifikasi `git log --oneline -8` + `git status` di sesi code berikutnya sebelum asumsi.
+- **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar → STOP, delegate vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-16] Stats crash guards SHIPPED e6e45e6 (e686cec..e6e45e6)
+> **SHIPPED:** commit `e6e45e6` pushed `e686cec..e6e45e6`. HEAD = e6e45e6. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE = e6e45e6, lalu tes `/stats`.**
+
+- **Isi — crash guards `/stats`:**
+  - **Chunk hard-split 3800** — chunk stats dipecah paksa di 3800 (label `CEB="${n}"`), tak ada chunk > limit Telegram → pesan stats tak terpotong/gagal kirim.
+  - **Corrupt entry skip + warning** — entri usage rusak/corrupt di-skip + warning ditampilkan (bukan crash seluruh stats).
+  - **Drain `BaseException`** — drain path menangkap `BaseException`, sedangkan `_run` tetap `except Exception` (blok drain ditinggikan — tak ada task/exception bocor dari drain).
+  - **Chunk len log** — log panjang chunk tiap kirim (debug/deploy QA).
+- **Verifikasi:** stub **7/7 PASS** (offline, tanpa creds) — pola stub existing.
+- **⚠️ ROOT PRIMER:** Railway ACTIVE **masih `e686cec`** (atau lebih lama) — **live ≠ HEAD e6e45e6**. User WAJIB **Deploy Latest Commit** → ACTIVE = `e6e45e6` → tes `/stats` live. Semua entri sesi sebelumnya: deploy manual, auto-deploy off.
+- **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar → STOP, delegate vision agent. Cavemem MCP down — append manual.

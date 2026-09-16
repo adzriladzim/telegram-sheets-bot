@@ -31,7 +31,7 @@ PERIODS = {
 }
 _PERIOD_LABEL = {7: "7 hari terakhir", 30: "30 hari terakhir", 0: "sepanjang waktu"}
 
-_MAX_MSG = 4000  # telegram soft cap; keep under 4096
+_MAX_MSG = 3500  # Telegram caps at 4096 UTF-8 *bytes*; margin for emoji
 _TOTAL_PERTEMUAN = 16
 
 
@@ -56,36 +56,42 @@ def _in_period(ts: str, days: int) -> bool:
         return True
 
 
-_HARD_SPLIT = 3800  # single oversized line: force-cut, keep under Telegram 4096 cap
+def _b(text: str) -> int:
+    return len(text.encode("utf-8"))
 
 
-def _chunks(lines: list[str], limit: int = _MAX_MSG) -> list[str]:
-    """Split lines into ≤limit-char messages; tries to keep lines whole (HTML tags
-    intact), but force-splits any single line longer than the limit using a safe
-    break near a space so a growing report can't overflow Telegram's 4096 cap."""
-    out: list[str] = []
+def _byte_split(text: str, cap: int = _MAX_MSG) -> list[str]:
+    """Cut plain text on UTF-8 byte boundaries (drops a split multibyte tail)."""
+    raw = text.encode("utf-8")
+    return [raw[i:i + cap].decode("utf-8", "ignore") for i in range(0, len(raw), cap)]
+
+
+def _chunks(lines: list[str], cap: int = _MAX_MSG) -> list[tuple[str, str | None]]:
+    """Pack report lines into (text, parse_mode) messages ≤cap UTF-8 bytes.
+
+    Splits only at line boundaries, so HTML tags never get cut in half (a bare
+    ``<b`` fragment is what Telegram rejects). A single line over the cap (rare)
+    is stripped of tags and sent as plain text (parse_mode None), byte-split if
+    still oversized."""
+    out: list[tuple[str, str | None]] = []
     cur: list[str] = []
     n = 0
     for line in lines:
-        while len(line) + 1 > limit:
-            hard = min(_HARD_SPLIT, len(line))
-            cut = line.rfind(" ", 0, hard)
-            if cut <= 0:
-                cut = hard
+        if _b(line) > cap:
             if cur:
-                out.append("\n".join(cur))
+                out.append(("\n".join(cur), ParseMode.HTML))
                 cur, n = [], 0
-            out.append(line[:cut])
-            line = line[cut:].lstrip()
-        w = len(line) + 1
-        if line:
-            if cur and n + w > limit:
-                out.append("\n".join(cur))
-                cur, n = [], 0
-            cur.append(line)
-            n += w
+            plain = html.unescape(re.sub(r"<[^>]+>", "", line))
+            out += [(p, None) for p in _byte_split(plain, cap)]
+            continue
+        w = _b(line) + 1
+        if cur and n + w > cap:
+            out.append(("\n".join(cur), ParseMode.HTML))
+            cur, n = [], 0
+        cur.append(line)
+        n += w
     if cur:
-        out.append("\n".join(cur))
+        out.append(("\n".join(cur), ParseMode.HTML))
     return out
 
 
@@ -315,9 +321,10 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         pass
     chunks = _chunks(L)
-    for i, part in enumerate(chunks, 1):
-        log.info("stats chunk %d/%d len=%d", i, len(chunks), len(part))
-        await update.message.reply_text(part, parse_mode=ParseMode.HTML)
+    for i, (part, pm) in enumerate(chunks, 1):
+        log.info("stats chunk %d/%d chars=%d bytes=%d plain=%s",
+                 i, len(chunks), len(part), _b(part), pm is None)
+        await update.message.reply_text(part, parse_mode=pm)
 
 
 def register(app: Application, cfg) -> None:
