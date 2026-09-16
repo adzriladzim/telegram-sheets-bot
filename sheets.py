@@ -715,6 +715,12 @@ class SheetsClient:
                 for r2 in rows[nh + 2:]:
                     if r2 and r2[0].strip() == "Program Studi":
                         break
+                    # Row right under the session-number row holds the filler's
+                    # NAME in the meeting columns (no NIM/Nama). Skip no-id rows
+                    # so a stamped name can't fake a filled meeting (same guard
+                    # _absen_counts/_list_students already apply).
+                    if not r2 or not (r2[0].strip() or (len(r2) > 1 and r2[1].strip())):
+                        continue
                     for p in range(1, 17):
                         col = 3 + (p - 1)
                         if len(r2) > col and r2[col].strip():

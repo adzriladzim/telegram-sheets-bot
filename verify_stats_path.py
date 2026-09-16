@@ -25,7 +25,8 @@ async def main():
         last_ts[e["name"]] = e["ts"]
     print("pdata ok:", len(pdata))
 
-    # 2. weekly sections (wrapped in prod but exec anyway)
+# 2. weekly sections (wrapped in prod but exec anyway)
+    matriks, arrears = [], []
     try:
         matriks, arrears = await stats._weekly_sections(sc, names)
         print("weekly ok:", len(matriks), "matriks,", len(arrears), "arrears")
@@ -42,12 +43,16 @@ async def main():
         traceback.print_exc()
         cov = None
 
-    # 4. build report
+# 4. build report — summary + detail
     try:
-        L = stats._build_report(names, data, pdata, days, per_menu, per_user, last_ts, matriks, arrears, cov)
-        print("build ok:", len(L), "lines")
+        L = stats._build_summary(names, data, pdata, days, per_menu, per_user, last_ts, matriks, arrears, cov)
+        print("summary ok:", len(L), "lines")
         for i, (part, pm) in enumerate(stats._chunks(L)):
-            print(f"chunk{i} chars={len(part)} bytes={stats._b(part)} plain={pm is None}")
+            print(f"  chunk{i} chars={len(part)} bytes={stats._b(part)} plain={pm is None}")
+        d = stats._build_detail(names, data, pdata, days, per_menu, per_user, last_ts, matriks, arrears, cov)
+        print("detail ok:", len(d), "lines")
+        for i, (part, pm) in enumerate(stats._chunks(d)):
+            print(f"  chunk{i} chars={len(part)} bytes={stats._b(part)} plain={pm is None}")
     except Exception as e:
         print("BUILD CRASH:", type(e).__name__, e)
         traceback.print_exc()

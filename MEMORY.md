@@ -1,7 +1,7 @@
 # MEMORY — telegram-sheets-bot (TelefasilBot)
 
 > Per-project memory. Read at cold session start. Append-only.
-> Updated: 2026-09-16 (HEAD e6e45e6 — stats crash guards: chunk hard-split 3800, corrupt entry skip; Railway deploy MANUAL)
+> Updated: 2026-09-17 (HEAD a37a294 — html.escape sweep 42 titik 7 handler; Railway deploy MANUAL)
 
 ## What
 Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, rekap kehadiran, backup, cancel kelas langsung ke Google Sheets. Multi-user (satu bot, tiap fasil lihat jadwal sendiri). Bot: [@telefasil_bot](https://t.me/telefasil_bot).
@@ -232,4 +232,26 @@ Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, 
   - **Chunk len log** — log panjang chunk tiap kirim (debug/deploy QA).
 - **Verifikasi:** stub **7/7 PASS** (offline, tanpa creds) — pola stub existing.
 - **⚠️ ROOT PRIMER:** Railway ACTIVE **masih `e686cec`** (atau lebih lama) — **live ≠ HEAD e6e45e6**. User WAJIB **Deploy Latest Commit** → ACTIVE = `e6e45e6` → tes `/stats` live. Semua entri sesi sebelumnya: deploy manual, auto-deploy off.
+- **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar → STOP, delegate vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-17] html.escape sweep SHIPPED a37a294 (e6e45e6..a37a294)
+> **SHIPPED:** commit `a37a294` pushed `e6e45e6..a37a294` (via `e0e2093` chunk fix, `e604184` stats fix). HEAD = a37a294. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE = a37a294, lalu tes `/stats` + semua flow.**
+
+- **Isi — html.escape sweep:**
+  - **42 titik escape di 7 handler** — input user (nama, kode, catatan, dll) di-`html.escape` sebelum kirim ke Telegram (parse_mode HTML) → cegah broken markup / user-content jadi markup.
+  - **Verify:** stub `verify_html_escape.py` PASS, **literal `<{` sisa = 0** (grep literal).
+  - Commit perantara range: `e0e2093` chunk fix, `e604184` stats fix.
+- **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE jadi **a37a294**; (2) tes `/stats` live; (3) tes semua flow (log/rekap/absen/backup/cancel/schedule/reminder).
+- **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar → STOP, delegate vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-17] Stats redesign + coverage fix SHIPPED <COMMIT> (a37a294..<COMMIT>)
+> **SHIPPED:** commit `<COMMIT>` pushed `a37a294..<COMMIT>`. HEAD = `<COMMIT>`. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE = <COMMIT>, lalu tes `/stats` + `/stats detail`.**
+
+- **Audit bug absen coverage (live):**
+  - **ROOT CAUSE (bukan deteksi gagal):** `_absen_coverage` menghitung **baris nama pengisi** (row tepat di bawah baris nomor sesi, tanpa NIM) sebagai pertemuan terisi → **21 kode overcount** (contoh DS01 tampil [2] padahal kosong). Kolom offset (3+(p-1)) SUDAH benar vs baris nomor sesi. Blok kosong tidak ikut.
+  - **"Semua 405 tampil 0/16" = artefak tampilan:** report sort ASCENDING + hanya 10 teratas → user cuma lihat yang termacet. Data asli: 247/405 non-empty, 158 kosong (160 setelah fix, DS01 dkk benar-benar kosong).
+  - **WDC05 TIDAK ADA** di absen (15 tab), jadwal, maupun Zoom Record batch ini → tak bisa diverifikasi (bukan bug bot).
+  - **Fix:** `sheets._absen_coverage` skip row tanpa NIM/Nama (guard sama dgn `_absen_counts`) — verifikasi live inflasi 21→0, cov == raw scan.
+- **Redesign `/stats`:** default = ringkas 1 bubble (Aktif X/Y, Sudah-log %, lewat, 🔴 Perlu perhatian top tunggakan + tertua, ✅ Beres semua nama, Absen macet N, bar 7 hari cap 40). `/stats detail` = roster penuh + matriks + tunggakan per fasil (kode saja, 📅 tanggal sekali per grup) + cakupan macet saja + bar. Arg `detail|rinci|full|lengkap`, periode tetap (`/stats detail bulan`). Escape + chunk 3500 line-boundary tetap.
+- **Verify:** stub `verify_stats_redesign.py` **16/16 PASS** (offline fake gspread + render); `verify_stats_chunks.py` PASS; py_compile semua file OK.
 - **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar → STOP, delegate vision agent. Cavemem MCP down — append manual.

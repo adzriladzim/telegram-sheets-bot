@@ -1,5 +1,10 @@
-"""/stats [minggu|bulan|semua] — admin only: usage roster, weekly completeness,
-arrears, absen coverage, 7-day activity bars."""
+"""/stats [detail] [minggu|bulan|semua] — admin only.
+
+Default = executive summary (1 bubble): active roster count, arrears +
+logged %, 🔴 perlu perhatian (top tunggakan + tertua), ✅ beres semua.
+`/stats detail` = full roster, kelengkapan matriks, tunggakan per fasil,
+absen coverage (macet saja), 7-day activity bars.
+"""
 from __future__ import annotations
 
 import html
@@ -30,6 +35,8 @@ PERIODS = {
     "semua": 0, "all": 0, "total": 0,
 }
 _PERIOD_LABEL = {7: "7 hari terakhir", 30: "30 hari terakhir", 0: "sepanjang waktu"}
+
+_DETAIL_WORDS = {"detail", "rinci", "full", "lengkap"}
 
 _MAX_MSG = 3500  # Telegram caps at 4096 UTF-8 *bytes*; margin for emoji
 _TOTAL_PERTEMUAN = 16
@@ -96,7 +103,7 @@ def _chunks(lines: list[str], cap: int = _MAX_MSG) -> list[tuple[str, str | None
 
 
 def _activity_bars(data: list[dict]) -> list[str]:
-    """Last 7 WIB days as text bars (cap 40 chars)."""
+    """Last 7 WIB days as text bars (bar capped 40 chars; count always shown)."""
     by_day: Counter = Counter()
     for e in data:
         if not isinstance(e, dict):
@@ -111,12 +118,14 @@ def _activity_bars(data: list[dict]) -> list[str]:
     for i in range(6, -1, -1):
         d = today - timedelta(days=i)
         n = by_day.get(d, 0)
-        lines.append(f"{sheets.DAY_ORDER[d.weekday()]} {d.strftime('%d/%m')} {'█' * min(n, 40)} {n}")
+        bar = "█" * min(n, 40)
+        lines.append(f"{sheets.DAY_ORDER[d.weekday()]} {d.strftime('%d/%m')} {bar} {n}")
     return lines
 
 
 async def _weekly_sections(sc, names: list[str]) -> tuple[list, list]:
-    """(matriks rows, arrears rows). matriks: (name, [(kode, log_mark, rekap_mark)])."""
+    """(matriks, arrears). matriks: (name, [(kode, log_mark, rekap_mark)]).
+    arrears: (name, cls, label, pn, cmpd_ddmmyyyy)."""
     from handlers.log import _parse_backup_date
     matriks: list = []
     arrears: list = []
@@ -171,7 +180,7 @@ async def _weekly_sections(sc, names: list[str]) -> tuple[list, list]:
                     pn = (await sc.absen_counts(c.code, _first_num(nxt)))["total"] == 0
                 except sheets.SheetsError:
                     pn = None  # kode may be absent from absen sheet
-                arrears.append((name, c, label, pn))
+                arrears.append((name, c, label, pn, cmpd))
         if row:
             matriks.append((name, row))
     return matriks, arrears
@@ -190,30 +199,78 @@ def _filter_period(data: list[dict], days: int) -> list[dict]:
     return out
 
 
-def _build_report(names: list[str], data: list[dict], pdata: list[dict], days: int,
+def _arr_date(cmpd: str):
+    try:
+        return datetime.strptime(cmpd, "%d/%m/%Y").date()
+    except (ValueError, TypeError):
+        return None
+
+
+def _log_pct(matriks: list) -> int:
+    tot = logged = 0
+    for _, row in matriks:
+        for _, lm, _ in row:
+            if lm != "?":
+                tot += 1
+                if lm == "✓":
+                    logged += 1
+    return round(logged / tot * 100) if tot else 0
+
+
+def _build_summary(names: list[str], data: list[dict], pdata: list[dict], days: int,
+                   per_menu: Counter, per_user: dict, last_ts: dict,
+                   matriks: list, arrears: list, cov: dict | None) -> list[str]:
+    """Executive summary — 1 bubble (chunked only if extreme)."""
+    active = sum(1 for n in names if sum(per_user[n].values()) > 0)
+    by_name: dict[str, list] = defaultdict(list)
+    for name, c, label, pn, cmpd in arrears:
+        by_name[name].append((c.code, label, pn, cmpd))
+
+    L = [
+        "📊 <b>STATS BOT</b> — ringkas",
+        f"👥 Aktif {active}/{len(names)} fasil · ⚡ {len(pdata)} aksi ({_PERIOD_LABEL[days]})",
+        f"⚡ Sudah-log {_log_pct(matriks)}% kelas · ⏳ lewat {len(arrears)}",
+    ]
+    if cov is not None:
+        macet = sum(1 for v in cov.values() if not v)
+        L.append(f"📋 Absen macet: {macet} kode 0/{_TOTAL_PERTEMUAN}")
+    L.append("")
+    if by_name:
+        L.append("🔴 <b>Perlu perhatian</b>")
+        for name in sorted(by_name, key=lambda n: (-len(by_name[n]), n)):
+            items = by_name[name]
+            dates = [_arr_date(d) for _k, _l, _p, d in items]
+            dates = [d for d in dates if d is not None]
+            oldest = min(dates).strftime("%d/%m") if dates else "?"
+            L.append(f"• {html.escape(name)} — {len(items)} tunggakan (tertua {oldest})")
+    else:
+        L.append("🟢 Tidak ada tunggakan")
+    beres = sorted((n for n in names if n not in by_name),
+                   key=lambda n: (-sum(per_user[n].values()), n))
+    L.append("")
+    L.append(f"✅ <b>Beres semua</b> ({len(beres)} fasil tanpa tunggakan)")
+    if beres:
+        shown = beres[:50]
+        line = "• " + ", ".join(html.escape(n) for n in shown)
+        if len(beres) > len(shown):
+            line += f" … +{len(beres) - len(shown)} lain"
+        L.append(line)
+    else:
+        L.append("• (tidak ada)")
+    L += ["", "<b>Aktivitas 7 hari</b>"]
+    L += _activity_bars(data)
+    return L
+
+
+def _build_detail(names: list[str], data: list[dict], pdata: list[dict], days: int,
                   per_menu: Counter, per_user: dict, last_ts: dict,
                   matriks: list, arrears: list, cov: dict | None) -> list[str]:
-    """Render the full report as HTML lines (chunked later by _chunks)."""
+    """Full report — roster, kelengkapan, tunggakan per fasil, coverage macet."""
     ever = {e.get("name") for e in data if isinstance(e, dict) and isinstance(e.get("name"), str)}
-    if days:
-        weeks = max(1, round(days / 7))
-    else:
-        tss = []
-        for e in data:
-            if not isinstance(e, dict):
-                continue
-            try:
-                tss.append(datetime.fromisoformat(str(e.get("ts"))))
-            except (ValueError, TypeError, KeyError):
-                continue
-        span = (datetime.now(sheets.WIB) - min(tss)).days if tss else 0
-        weeks = max(1, round(span / 7))
-    thr = 3 * weeks
-    rare = [n for n in names if 0 < sum(per_user[n].values()) < thr]
     never = [n for n in names if n not in ever]
 
-    L: list[str] = [
-        "📊 <b>STATS BOT</b>",
+    L = [
+        "📊 <b>STATS BOT</b> — detail",
         f"👥 {len(names)} terdaftar | ⚡ {len(pdata)} aksi ({_PERIOD_LABEL[days]})",
         "",
         "<b>Per menu</b>",
@@ -231,12 +288,9 @@ def _build_report(names: list[str], data: list[dict], pdata: list[dict], days: i
         acts = " ".join(f"{ACT_LABEL.get(k, k)} {c.get(k, 0)}" for k in ACT_ORDER)
         ts = html.escape(last_ts.get(n, "")[:16].replace("T", " ")) or "—"
         L.append(f"• {html.escape(n)} — {acts}, terakhir {ts}")
-    if rare:
-        L += ["", f"<b>Jarang pakai</b> ({_PERIOD_LABEL[days]}, kurang dari {thr} aksi)"]
-        L += [f"• {html.escape(n)} ({sum(per_user[n].values())} aksi)" for n in sorted(rare)]
     if never:
-        L += ["", f"<b>Belum pernah pakai ({len(never)})</b>"]
-        L += [f"• {html.escape(n)}" for n in never]
+        L += ["", f"<b>Belum pernah pakai ({len(never)})</b>",
+              "• " + ", ".join(html.escape(n) for n in never)]
     if matriks:
         L += ["", "<b>Kelengkapan minggu ini</b>",
               "<i>✓ terisi · ✗ lewat belum · ○ jadwal mendatang</i>"]
@@ -245,28 +299,40 @@ def _build_report(names: list[str], data: list[dict], pdata: list[dict], days: i
             L.append(f"• {html.escape(name)} — {codes}")
             L.append(f"   log {' '.join(r[1] for r in row)} | rekap {' '.join(r[2] for r in row)}")
     if arrears:
-        L += ["", f"<b>Tunggakan</b> (kelas lewat, belum di-log: {len(arrears)})"]
+        L += ["", f"<b>Tunggakan per fasil</b> ({len(arrears)})"]
         by_name: dict = defaultdict(list)
-        for name, c, label, pn in arrears:
-            by_name[name].append((c, label, pn))
+        for name, c, label, pn, cmpd in arrears:
+            by_name[name].append((c.code, label, pn, cmpd))
         for name in sorted(by_name):
-            items = []
-            for c, label, pn in by_name[name]:
-                extra = " [absen belum]" if pn else (" [absen ada]" if pn is not None else "")
-                items.append(f"{html.escape(c.code)} ({html.escape(label)}){extra}")
-            L.append(f"• {html.escape(name)}: {', '.join(items)}")
+            items = by_name[name]
+            kodes = ",".join(html.escape(k) for k, _l, _p, _d in items)
+            L.append(f"• {html.escape(name)} — {kodes} ({len(items)})")
+            by_date: dict = defaultdict(list)
+            for k, lab, _p, _d in items:
+                by_date[lab].append(html.escape(k))
+            for lab, ks in by_date.items():
+                L.append(f"   📅 {html.escape(lab)}: {', '.join(ks)}")
     if cov is not None:
         items = sorted(((k, len(v)) for k, v in cov.items()), key=lambda x: (x[1], x[0]))
-        L += ["", f"<b>Cakupan absen per kode</b> — {len(items)} kode, pertemuan terisi/{_TOTAL_PERTEMUAN}"]
-        if items:
-            for k, f in items[:10]:
-                warn = " ⚠️" if f == 0 else ""
-                L.append(f"• {html.escape(k)}: {f}/{_TOTAL_PERTEMUAN}{warn}")
-        else:
-            L.append("• (belum ada)")
+        macet = [x for x in items if x[1] == 0]
+        partial = sum(1 for x in items if 0 < x[1] < _TOTAL_PERTEMUAN)
+        full = sum(1 for x in items if x[1] >= _TOTAL_PERTEMUAN)
+        L += ["", "<b>Cakupan absen (macet saja)</b>",
+              f"⚠️ macet 0/{_TOTAL_PERTEMUAN}: {len(macet)} · belum penuh: {partial} · lengkap: {full}"]
+        for k, _f in macet[:100]:
+            L.append(f"• {html.escape(k)}: 0/{_TOTAL_PERTEMUAN} ⚠️")
+        if len(macet) > 100:
+            L.append(f"… +{len(macet) - 100} kode macet lain")
     L += ["", "<b>Aktivitas 7 hari</b>"]
     L += _activity_bars(data)
     return L
+
+
+def _parse_args(args: list[str] | None) -> tuple[bool, int]:
+    args = args or []
+    detail = any(a.strip().casefold() in _DETAIL_WORDS for a in args)
+    period_arg = next((a for a in args if a.strip().casefold() not in _DETAIL_WORDS), None)
+    return detail, _period_days(period_arg)
 
 
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -279,7 +345,7 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         pass
     busy = await update.message.reply_text("⏳ Hitung statistik...")
-    days = _period_days((context.args or [None])[0])
+    detail, days = _parse_args(context.args)
     all_users = users.registry().all()
     names = sorted(all_users.values())
 
@@ -313,8 +379,12 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except sheets.SheetsError:
         cov = None
 
-    L = _build_report(names, data, pdata, days, per_menu, per_user, last_ts,
-                      matriks, arrears, cov)
+    if detail:
+        L = _build_detail(names, data, pdata, days, per_menu, per_user, last_ts,
+                          matriks, arrears, cov)
+    else:
+        L = _build_summary(names, data, pdata, days, per_menu, per_user, last_ts,
+                           matriks, arrears, cov)
 
     try:
         await busy.delete()
