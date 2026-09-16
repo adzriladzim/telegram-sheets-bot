@@ -255,3 +255,13 @@ Bot Telegram fasilitator **Cakrawala University** â†’ catat Zoom Record, absen, 
 - **Redesign `/stats`:** default = ringkas 1 bubble (Aktif X/Y, Sudah-log %, lewat, ðŸ”´ Perlu perhatian top tunggakan + tertua, âœ… Beres semua nama, Absen macet N, bar 7 hari cap 40). `/stats detail` = roster penuh + matriks + tunggakan per fasil (kode saja, ðŸ“… tanggal sekali per grup) + cakupan macet saja + bar. Arg `detail|rinci|full|lengkap`, periode tetap (`/stats detail bulan`). Escape + chunk 3500 line-boundary tetap.
 - **Verify:** stub `verify_stats_redesign.py` **16/16 PASS** (offline fake gspread + render); `verify_stats_chunks.py` PASS; py_compile semua file OK.
 - **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar â†’ STOP, delegate vision agent. Cavemem MCP down â€” append manual.
+
+## [2026-09-17] Stats default RINGAN + copy start/help SHIPPED 2114d59 (b85db18..2114d59)
+> **SHIPPED:** commit `2114d59` pushed `b85db18..2114d59`. HEAD = 2114d59. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit ? ACTIVE = 2114d59, lalu tes /stats + /help.**
+
+- **Default /stats = RINGAN (1-2 bubble):** ringkasan eksekutif (aktif X/Y, aksi, sudah-log %, ? lewat, ?? top-3 tunggakan + tertua, "+N fasil lain — lihat /stats detail") + Per menu 1 baris + Jarang pakai (nama saja) + Belum pernah (nama saja, hitung). Balik keluhan "KEPADETAN".
+- **/stats detail** = laporan lengkap 8 blok (roster penuh, per menu, jarang, belum pernah, kelengkapan/tunggakan per fasil, cakupan macet, aktivitas). **/stats ringkas** = tetap alias minimal (blok eksekutif saja).
+- _parse_args: none -> ("ringan",7); detail -> lengkap; ringkas -> ringkas. Stray `<` di "Jarang pakai <{thr}" dihindari (raw "<" = BadRequest, pakai "kurang dari {thr} aksi") — kelas bug e604184.
+- **Copy /start + /help:** ganti judul "Zoom Record Bot / bot pencatat keseharian" ? **TelefasilBot — asisten harian fasil Cakrawala**: catat ngajar, absen, rekap, backup, sampai jadwal, semua dari chat ini. /help sebut SEMUA fitur + notif otomatis + ajak aksi (/zoom). Tombol inline tetap.
+- **Verify:** verify_stats_redesign.py **32/32 PASS** (parse baru, light =1-2 bubble + no detail blok, detail 8 blok, chunk =3500 parseable) + verify_start_copy.py (baru) **8/8 PASS** + verify_stats_chunks PASS + verify_html_escape PASS + compileall OK. Stale: verify_stats_html.py rusak pre-existing (panggil _build_report yg tak ada) — tidak disentuh.
+- **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar ? STOP, delegate vision agent. Cavemem MCP down — append manual.
