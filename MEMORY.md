@@ -244,8 +244,8 @@ Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, 
 - **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE jadi **a37a294**; (2) tes `/stats` live; (3) tes semua flow (log/rekap/absen/backup/cancel/schedule/reminder).
 - **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar → STOP, delegate vision agent. Cavemem MCP down — append manual.
 
-## [2026-09-17] Stats redesign + coverage fix SHIPPED <COMMIT> (a37a294..<COMMIT>)
-> **SHIPPED:** commit `<COMMIT>` pushed `a37a294..<COMMIT>`. HEAD = `<COMMIT>`. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE = <COMMIT>, lalu tes `/stats` + `/stats detail`.**
+## [2026-09-17] Stats redesign + coverage fix SHIPPED cfbdd59 (a37a294..cfbdd59)
+> **SHIPPED:** commit `cfbdd59` pushed `a37a294..cfbdd59`. HEAD = `cfbdd59`. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE = cfbdd59, lalu tes `/stats` + `/stats detail`.**
 
 - **Audit bug absen coverage (live):**
   - **ROOT CAUSE (bukan deteksi gagal):** `_absen_coverage` menghitung **baris nama pengisi** (row tepat di bawah baris nomor sesi, tanpa NIM) sebagai pertemuan terisi → **21 kode overcount** (contoh DS01 tampil [2] padahal kosong). Kolom offset (3+(p-1)) SUDAH benar vs baris nomor sesi. Blok kosong tidak ikut.
