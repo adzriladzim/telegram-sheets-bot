@@ -1,6 +1,7 @@
 """/log — ConversationHandler: 6-step Zoom Record entry form."""
 from __future__ import annotations
 
+import html
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
@@ -163,7 +164,7 @@ async def pick_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
     c = classes[idx]
     context.user_data["cls"] = c
-    await q.message.edit_text(f"Kelas: <b>{c.code}</b> — {c.subject}\n\n", parse_mode=ParseMode.HTML)
+    await q.message.edit_text(f"Kelas: <b>{html.escape(c.code)}</b> — {html.escape(c.subject)}\n\n", parse_mode=ParseMode.HTML)
     # Auto-suggest next meeting
     wait = await q.message.reply_text("⏳ Cari pertemuan terakhir...")
     try:
@@ -179,8 +180,8 @@ async def pick_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
          InlineKeyboardButton("🏫 Offline", callback_data="s:f")],
         [InlineKeyboardButton("◀️ Kembali", callback_data="back:meeting")],
     ])
-    auto_note = f"(auto pertemuan {nxt}" + (f", terakhir {last}" if last else "") + ")"
-    await q.message.reply_text(f"2️⃣ Pertemuan: <b>{nxt}</b> {auto_note}\n3️⃣ Skema kelas:", parse_mode=ParseMode.HTML, reply_markup=kb)
+    auto_note = f"(auto pertemuan {html.escape(nxt)}" + (f", terakhir {html.escape(last)}" if last else "") + ")"
+    await q.message.reply_text(f"2️⃣ Pertemuan: <b>{html.escape(nxt)}</b> {auto_note}\n3️⃣ Skema kelas:", parse_mode=ParseMode.HTML, reply_markup=kb)
     return SKEMA
 
 
@@ -326,7 +327,7 @@ def _summary(rec: sheets.LogRecord) -> str:
         ("Dosen", rec.lecturer), ("Jam mulai", rec.start_time),
         ("Zoom", rec.zoom or "—"), ("Catatan", rec.notes or "—"),
     ]
-    lines = "\n".join(f"• <b>{k}:</b> {v}" for k, v in rows)
+    lines = "\n".join(f"• <b>{html.escape(k)}:</b> {html.escape(v)}" for k, v in rows)
     return f"📋 <b>Konfirmasi data:</b>\n{lines}\n\nLanjut submit?"
 
 

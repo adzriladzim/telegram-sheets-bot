@@ -1,6 +1,7 @@
 """/rekap — rekap kehadiran fasil per kelas (spreadsheet Rekap Batch 5)."""
 from __future__ import annotations
 
+import html
 import logging
 import mimetypes
 import re
@@ -127,7 +128,7 @@ async def pick_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
     c = classes[idx]
     context.user_data["cls"] = c
-    await q.message.edit_text(f"Kelas: <b>{c.code}</b> — {c.subject}\n\n", parse_mode=ParseMode.HTML)
+    await q.message.edit_text(f"Kelas: <b>{html.escape(c.code)}</b> — {html.escape(c.subject)}\n\n", parse_mode=ParseMode.HTML)
     # Cek baris rumpang/lengkap untuk tanggal ini — tawarkan lengkapi, jangan dobel
     tab = context.user_data.get("rekap_tab", "")
     try:
@@ -140,7 +141,7 @@ async def pick_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             [InlineKeyboardButton("◀️ Kembali", callback_data="rkb:class")],
         ])
         await q.message.reply_text(
-            f"ℹ️ {c.code} tanggal ini <b>sudah lengkap</b> di Rekap. Buat baris baru?", parse_mode=ParseMode.HTML, reply_markup=kb)
+            f"ℹ️ {html.escape(c.code)} tanggal ini <b>sudah lengkap</b> di Rekap. Buat baris baru?", parse_mode=ParseMode.HTML, reply_markup=kb)
         return CLASS
     if st.get("state") == "incomplete":
         context.user_data["fix_row"] = st["row"]
@@ -151,7 +152,7 @@ async def pick_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             [InlineKeyboardButton("◀️ Kembali", callback_data="rkb:class")],
         ])
         await q.message.reply_text(
-            f"⚠️ {c.code} tanggal ini <b>belum lengkap</b> (kurang: {', '.join(st['gaps'])}). Lengkapi langsung?",
+            f"⚠️ {html.escape(c.code)} tanggal ini <b>belum lengkap</b> (kurang: {', '.join(html.escape(g) for g in st['gaps'])}). Lengkapi langsung?",
             parse_mode=ParseMode.HTML, reply_markup=kb)
         return CLASS
     return await _begin_meeting(q.message, context)
@@ -173,8 +174,8 @@ async def _begin_meeting(msg, context) -> int:
          InlineKeyboardButton("🏫 On-site", callback_data="rkt:s")],
         [InlineKeyboardButton("◀️ Kembali", callback_data="rkb:meeting")],
     ])
-    auto_note = f"(auto pertemuan {nxt} dari Zoom Record" + (f", terakhir {last}" if last else "") + ")"
-    await msg.reply_text(f"2️⃣ Pertemuan: <b>{nxt}</b> {auto_note}\n3️⃣ Tipe kelas:", parse_mode=ParseMode.HTML, reply_markup=kb)
+    auto_note = f"(auto pertemuan {html.escape(nxt)} dari Zoom Record" + (f", terakhir {html.escape(last)}" if last else "") + ")"
+    await msg.reply_text(f"2️⃣ Pertemuan: <b>{html.escape(nxt)}</b> {auto_note}\n3️⃣ Tipe kelas:", parse_mode=ParseMode.HTML, reply_markup=kb)
     return TIPE
 
 
@@ -254,7 +255,7 @@ async def _confirm_fix(message: Message, context: ContextTypes.DEFAULT_TYPE) -> 
         [InlineKeyboardButton("◀️ Kembali", callback_data="rkb:bukti")],
     ])
     await message.reply_text(
-        f"📋 <b>Lengkapi baris {context.user_data.get('fix_row')}:</b>\n"
+        f"📋 <b>Lengkapi baris {html.escape(str(context.user_data.get('fix_row', '')))}:</b>\n"
         f"• Total/Hadir/Feedback: {o or '-'}/{p or '-'}/{qf or '-'}",
         parse_mode=ParseMode.HTML, reply_markup=kb)
     return CONFIRM
@@ -547,7 +548,7 @@ async def _confirm(message: Message, context: ContextTypes.DEFAULT_TYPE) -> int:
         ("Bukti", rec.bukti or "—"),
         ("Total/Hadir/Feedback", f"{o or '-'}/{p or '-'}/{qf or '-'}"),
     ]
-    lines = "\n".join(f"• <b>{k}:</b> {v}" for k, v in rows)
+    lines = "\n".join(f"• <b>{html.escape(k)}:</b> {html.escape(v)}" for k, v in rows)
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Submit", callback_data="rkx:ok"),
          InlineKeyboardButton("❌ Batal", callback_data="rkx:no")],

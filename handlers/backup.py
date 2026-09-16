@@ -1,6 +1,7 @@
 """/backup — izin & backup fasil."""
 from __future__ import annotations
 
+import html
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -109,7 +110,7 @@ async def pick_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
     c = classes[idx]
     context.user_data["bk_cls"] = c
-    await q.message.edit_text(f"Kelas: <b>{c.code}</b> — {c.subject}", parse_mode=ParseMode.HTML)
+    await q.message.edit_text(f"Kelas: <b>{html.escape(c.code)}</b> — {html.escape(c.subject)}", parse_mode=ParseMode.HTML)
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Kembali", callback_data="bk:back_class")]])
     await q.message.reply_text("2️⃣ Hari/Tanggal izin? (contoh: Senin, 8 September 2026)", reply_markup=kb)
     return TANGGAL
@@ -129,7 +130,7 @@ async def enter_pengganti(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if len(matches) == 1:
         full = matches[0]
         context.user_data["bk_pengganti"] = full
-        await update.effective_message.reply_text(f"Pengganti: {raw} → <b>{full}</b>", parse_mode=ParseMode.HTML)
+        await update.effective_message.reply_text(f"Pengganti: {html.escape(raw)} → <b>{html.escape(full)}</b>", parse_mode=ParseMode.HTML)
     elif len(matches) > 1:
         context.user_data["bk_pengganti_raw"] = raw
         context.user_data["bk_pengganti_matches"] = matches
@@ -151,7 +152,7 @@ async def pick_pengganti(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     matches = context.user_data.get("bk_pengganti_matches", [])
     full = matches[idx] if idx < len(matches) else ""
     context.user_data["bk_pengganti"] = full
-    await q.message.edit_text(f"Pengganti: <b>{full}</b>", parse_mode=ParseMode.HTML)
+    await q.message.edit_text(f"Pengganti: <b>{html.escape(full)}</b>", parse_mode=ParseMode.HTML)
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("⏭ Skip", callback_data="bk:skip_note")],
         [InlineKeyboardButton("◀️ Kembali", callback_data="bk:back_pengganti")],
@@ -173,7 +174,15 @@ async def skip_catatan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return await _confirm(update.message, context)
 
 def _summary(r):
-    return f"📋 <b>Konfirmasi Backup:</b>\n• Fasil Awal: {r.facilitator_awal}\n• Hari/Tgl: {r.hari_tanggal}\n• Jam: {r.jam}\n• Kelas: {r.kode} — {r.subject}\n• Dosen: {r.lecturer}\n• Ruang: {r.room}\n• Pengganti: {r.pengganti}\n• Catatan: {r.catatan or '—'}\n\nSubmit?"
+    return (f"📋 <b>Konfirmasi Backup:</b>\n"
+            f"• Fasil Awal: {html.escape(r.facilitator_awal)}\n"
+            f"• Hari/Tgl: {html.escape(r.hari_tanggal)}\n"
+            f"• Jam: {html.escape(r.jam)}\n"
+            f"• Kelas: {html.escape(r.kode)} — {html.escape(r.subject)}\n"
+            f"• Dosen: {html.escape(r.lecturer)}\n"
+            f"• Ruang: {html.escape(r.room)}\n"
+            f"• Pengganti: {html.escape(r.pengganti)}\n"
+            f"• Catatan: {html.escape(r.catatan or '—')}\n\nSubmit?")
 
 async def _confirm(msg, context):
     chat_id = msg.chat_id if hasattr(msg, 'chat_id') else context.effective_chat.id

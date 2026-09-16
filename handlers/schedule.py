@@ -45,20 +45,20 @@ async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             if c.category == "Backup":
                 mark = " ← <b>HARI INI</b>" if _parse_backup_date(c.backup_hari_tanggal) == today_full else ""
                 lines.append(
-                    f"<b>{day}</b>🔄 {html.escape(c.code)} — {html.escape(c.subject)} ({c.backup_hari_tanggal}){mark}\n"
+                    f"<b>{day}</b>🔄 {html.escape(c.code)} — {html.escape(c.subject)} ({html.escape(str(c.backup_hari_tanggal))}){mark}\n"
                     f"  🏫 {html.escape(c.room)} | 👤 {html.escape(c.lecturer)} | {html.escape(c.zoom_label)}"
                 )
             else:
                 mark = " ← <b>HARI INI</b>" if day == today else ""
                 lines.append(
-                    f"<b>{day}</b> {c.time_range}{mark}\n"
+                    f"<b>{day}</b> {html.escape(c.time_range)}{mark}\n"
                     f"  {html.escape(c.code)} — {html.escape(c.subject)}\n"
                     f"  🏫 {html.escape(c.room)} | 👤 {html.escape(c.lecturer)} | {html.escape(c.zoom_label)}"
                 )
             lines.append("")
     missing = [c.code for c in classes if not sheets.this_week_classes([c])]
     if missing:
-        lines.append(f"⚠️ Hari tak dikenali (cek sheet): {', '.join(missing)}")
+        lines.append(f"⚠️ Hari tak dikenali (cek sheet): {', '.join(html.escape(x) for x in missing)}")
     await update.effective_message.reply_text("\n".join(lines).strip(), parse_mode=ParseMode.HTML)
 
 

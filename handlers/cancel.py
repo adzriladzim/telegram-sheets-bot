@@ -1,6 +1,7 @@
 """/cancel — lapor kelas cancel (B-I di Kelas Cancel & Pengganti)."""
 from __future__ import annotations
 
+import html
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -97,7 +98,7 @@ async def pick_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
     c = classes[idx]
     context.user_data["cc_cls"] = c
-    await q.message.edit_text(f"Kelas: <b>{c.code}</b> — {c.subject}", parse_mode=ParseMode.HTML)
+    await q.message.edit_text(f"Kelas: <b>{html.escape(c.code)}</b> — {html.escape(c.subject)}", parse_mode=ParseMode.HTML)
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Kembali", callback_data="cc:back_class")]])
     await q.message.reply_text("2️⃣ Jadwal Awal? (contoh: Selasa, 9 September 2026)", reply_markup=kb)
     return JADWAL
@@ -121,7 +122,7 @@ async def _confirm(msg, context):
     chat_id = msg.chat_id if hasattr(msg, 'chat_id') else context.effective_chat.id
     name = users.get(chat_id) or ""
     rec = sheets.CancelRecord(c.lecturer, c.subject, context.user_data["cc_jadwal"], c.time_range, context.user_data["cc_sesi"], c.code, c.sks, name)
-    txt = f"📋 <b>Konfirmasi Cancel:</b>\n• Dosen: {rec.lecturer}\n• Matkul: {rec.subject}\n• Jadwal Awal: {rec.jadwal_awal}\n• Jam: {rec.jam}\n• Sesi: {rec.sesi}\n• Kode: {rec.kode}\n• SKS: {rec.sks}\n• Fasil: {rec.facilitator}\n\nSubmit?"
+    txt = f"📋 <b>Konfirmasi Cancel:</b>\n• Dosen: {html.escape(rec.lecturer)}\n• Matkul: {html.escape(rec.subject)}\n• Jadwal Awal: {html.escape(rec.jadwal_awal)}\n• Jam: {html.escape(rec.jam)}\n• Sesi: {html.escape(rec.sesi)}\n• Kode: {html.escape(rec.kode)}\n• SKS: {html.escape(rec.sks)}\n• Fasil: {html.escape(rec.facilitator)}\n\nSubmit?"
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Submit", callback_data="cc:ok"), InlineKeyboardButton("❌ Batal", callback_data="cc:no")],
         [InlineKeyboardButton("◀️ Kembali", callback_data="cc:back_sesi")],

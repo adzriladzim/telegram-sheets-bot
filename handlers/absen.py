@@ -1,6 +1,7 @@
 """/absen — rekap kehadiran mahasiswa ke sheet Absen."""
 from __future__ import annotations
 
+import html
 import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
@@ -133,7 +134,7 @@ async def pick_kode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await q.message.reply_text("Ketik Kode Kelas (contoh: Arch1):")
         return KODE
     context.user_data["absen_kode"] = kode
-    await q.message.edit_text(f"Kode: <b>{kode}</b>", parse_mode=ParseMode.HTML)
+    await q.message.edit_text(f"Kode: <b>{html.escape(kode)}</b>", parse_mode=ParseMode.HTML)
     await q.message.reply_text("2️⃣ Pertemuan ke-? (1-16)", reply_markup=_pertemuan_prompt_kb())
     return PERTEMUAN
 
@@ -345,7 +346,7 @@ async def pick_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     kode = context.user_data["absen_kode"]
     per = context.user_data["absen_pertemuan"]
     ids = context.user_data["absen_identifiers"]
-    txt = f"📋 <b>Konfirmasi Absen:</b>\n• Kode: {kode}\n• Pertemuan: {per}\n• Status: {status}\n• Jumlah: {len(ids)}\n• NIM/Nama: {', '.join(ids[:5])}{' ...' if len(ids)>5 else ''}\n\nSubmit?"
+    txt = f"📋 <b>Konfirmasi Absen:</b>\n• Kode: {html.escape(kode)}\n• Pertemuan: {per}\n• Status: {status}\n• Jumlah: {len(ids)}\n• NIM/Nama: {', '.join(html.escape(x) for x in ids[:5])}{' ...' if len(ids)>5 else ''}\n\nSubmit?"
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Submit", callback_data="abc:ok"), InlineKeyboardButton("❌ Batal", callback_data="abc:no")],
         [InlineKeyboardButton("◀️ Kembali", callback_data="abc:back")],
