@@ -788,9 +788,13 @@ class SheetsClient:
     async def absen_counts(self, kode: str, pertemuan: int) -> dict:
         return await self._run(partial(self._absen_counts, kode, pertemuan))
 
+    # Zoom Cakrawala display-name: "NNN_Nama Lengkap_Prodi" (NNN = 3 digit akhir NIM).
+    # Prodi segment: short, variant (If/SI/Ak) — NOT validated, hanya pemisah regex.
+    _ZOOM_DISPLAY_RE = re.compile(r"^(\d{3})_(.+?)_[A-Za-z0-9&'\-\s]+$")
+
     def _resolve_absen(self, kode: str, identifiers: list[str]) -> dict:
         """Resolve identifiers to student rows across ALL matching absen blocks.
-        NIM wajib exact-penuh, Nama contains.
+        NIM wajib exact-penuh, Nama contains, Zoom display-name "NNN_Nama_Prodi".
         Returns {blocks, matched: [(row_idx, nim, nama, mode, title)],
         ambiguous: {ident: [nama]}, unmatched: [ident]}."""
         blocks = self._locate_absen_block(kode)
@@ -805,18 +809,39 @@ class SheetsClient:
                 if nim or nama:
                     roster.append((r_idx, nim, nama or "-", mode, title))
         matched, ambiguous, unmatched = [], {}, []
+
+        def _accept(hits: list) -> bool:
+            """Single hit → accept; else leave to caller for ambiguous/unmatched."""
+            if len(hits) == 1 and hits[0] not in matched:
+                matched.append(hits[0])
+                return True
+            return False
+
         for ident in identifiers:
             norm = self._normalize(ident)
             if not norm:
                 continue
+            dn = self._ZOOM_DISPLAY_RE.match(ident)
+            if dn:
+                digits, core = dn.group(1), self._normalize(dn.group(2))
+                hits = [e for e in roster if core and core in self._normalize(e[2])]
+                if _accept(hits):
+                    continue
+                if len(hits) > 1:
+                    # Tiebreaker: NIM penuh endsWith 3 digit. Tanpa digit cocok → AMBIGU.
+                    digit_hits = [e for e in hits if e[1].strip().endswith(digits)]
+                    if _accept(digit_hits):
+                        continue
+                    ambiguous[ident] = [e[2] for e in hits[:5]]
+                    continue
+                # regex cocok tapi nama tak ketemu → jatuh ke jalur normal (unmatched)
             if norm.isdigit():
                 hits = [e for e in roster if e[1].strip() == norm]
             else:
                 hits = [e for e in roster if norm in self._normalize(e[2])]
-            if len(hits) == 1:
-                if hits[0] not in matched:
-                    matched.append(hits[0])
-            elif len(hits) > 1:
+            if _accept(hits):
+                continue
+            if len(hits) > 1:
                 ambiguous[ident] = [e[2] for e in hits[:5]]
             else:
                 unmatched.append(ident)

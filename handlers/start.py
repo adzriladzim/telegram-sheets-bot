@@ -18,7 +18,7 @@ HELP = (
     "<b>Perintah:</b>\n"
     "• /register &lt;nama&gt; — daftar nama fasilitator (cukup sekali)\n"
     "• /zoom — simpan record Zoom kelas\n"
-    "• /absen — rekap kehadiran mahasiswa\n"
+    "• /absen — rekap kehadiran mahasiswa (NIM atau nama Zoom: 029_Ahmad Maulana_If)\n"
     "• /rekap — rekap kehadiran fasil\n"
     "• /backup — izin & backup fasil\n"
     "• /cancel — lapor kelas cancel\n"

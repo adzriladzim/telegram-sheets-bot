@@ -168,7 +168,11 @@ async def pick_method(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     back_kb = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Kembali", callback_data="abi:back")]])
     if m == "nim":
         context.user_data["input_from"] = "method"
-        await q.message.reply_text("Ketik NIM (pisahkan koma, contoh: 26111600029, 26111600004):", reply_markup=back_kb)
+        await q.message.reply_text(
+            "Ketik NIM / Nama Zoom (pisahkan koma).\n"
+            "Contoh NIM: 26111600029, 26111600004\n"
+            "Contoh Nama Zoom: 029_Ahmad Maulana_If",
+            reply_markup=back_kb)
         return INPUT
     else:
         # Checklist Nama
@@ -277,7 +281,10 @@ async def toggle_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return STATUS
     if data == "add":
         back_kb = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Kembali", callback_data="abi:back")]])
-        await q.message.reply_text("Ketik Nama/NIM di luar list (pisahkan koma):", reply_markup=back_kb)
+        await q.message.reply_text(
+            "Ketik Nama/NIM di luar list (pisahkan koma).\n"
+            "Nama Zoom juga bisa: 029_Ahmad Maulana_If",
+            reply_markup=back_kb)
         return INPUT
     if data == "back":
         return await back_to_method(update, context)
