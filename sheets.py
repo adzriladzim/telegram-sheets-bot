@@ -54,8 +54,7 @@ SCHOOL_KEYWORDS = {
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive.readonly",
-    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/drive",
 ]
 
 WIB = timezone(timedelta(hours=7), name="WIB")
