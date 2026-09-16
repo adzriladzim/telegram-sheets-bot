@@ -78,6 +78,25 @@ def _safe_filename_part(part: str, fallback: str = "unnamed") -> str:
     return out or fallback
 
 
+def _api_reason(exc) -> str:
+    """Reason code from a Drive/Sheets HttpError (exc.error_details), e.g. storageQuotaExceeded. Best-effort."""
+    import json
+    det = getattr(exc, "error_details", None) or []
+    if not isinstance(det, list):
+        det = [det]
+    for d in det:
+        if isinstance(d, dict) and d.get("reason"):
+            return str(d["reason"])
+    try:
+        err = json.loads((exc.content or b"").decode("utf-8")).get("error", {})
+        for e in err.get("errors", []) or []:
+            if e.get("reason"):
+                return str(e["reason"])
+    except Exception:
+        pass
+    return ""
+
+
 class SheetsError(RuntimeError):
     """User-presentable Sheets failure."""
 
@@ -1182,7 +1201,8 @@ class SheetsClient:
         try:
             existing = drive.files().list(
                 q=f"'{parent}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
-                fields="files(id,name)", pageSize=100).execute().get("files", [])
+                fields="files(id,name)", pageSize=100,
+                supportsAllDrives=True, includeItemsFromAllDrives=True).execute().get("files", [])
             fnorm = self._normalize(facilitator)
             best, best_len = None, 0
             for f in existing:
@@ -1200,10 +1220,12 @@ class SheetsClient:
         except SheetsError:
             raise
         except googleapiclient.errors.HttpError as exc:
-            raise SheetsError(f"Drive: {exc.resp.status} {exc.resp.reason}") from exc
+            reason = _api_reason(exc)
+            raise SheetsError(f"Drive: {exc.resp.status} {exc.resp.reason}"
+                              + (f" ({reason})" if reason else "")) from exc
         folder = drive.files().create(
             body={"name": facilitator, "mimeType": "application/vnd.google-apps.folder",
-                  "parents": [parent]}, fields="id").execute()
+                  "parents": [parent]}, fields="id", supportsAllDrives=True).execute()
         cache[facilitator] = folder["id"]
         try:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1221,9 +1243,11 @@ class SheetsClient:
         folder = self._bukti_folder_for(drive, facilitator.strip() or "Lainnya")
         media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mimetype or "image/jpeg")
         f = drive.files().create(body={"name": filename, "parents": [folder]},
-                                 media_body=media, fields="id,webViewLink").execute()
+                                 media_body=media, fields="id,webViewLink",
+                                 supportsAllDrives=True).execute()
         try:
-            drive.permissions().create(fileId=f["id"], body={"type": "anyone", "role": "reader"}).execute()
+            drive.permissions().create(fileId=f["id"], body={"type": "anyone", "role": "reader"},
+                                       supportsAllDrives=True).execute()
         except Exception:
             pass
         log.info("uploaded bukti %s -> folder %s", filename, folder)
@@ -1274,7 +1298,9 @@ class SheetsClient:
                 status = exc.resp.status
                 log.exception("Drive/Sheets API failure (status %s)", status)
                 hint = " — rate limit, coba lagi nanti." if status == 429 else ""
-                raise SheetsError(f"Google API error {status}{hint}") from exc
+                reason = _api_reason(exc)
+                raise SheetsError(f"Google API error {status}{hint}"
+                                  + (f" — {reason}" if reason else "")) from exc
             except OSError as exc:
                 log.exception("file/network failure")
                 raise SheetsError("Gagal membaca kredensial/jaringan. Pastikan berkas kredensial tersedia.") from exc
