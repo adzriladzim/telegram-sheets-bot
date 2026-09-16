@@ -695,6 +695,35 @@ class SheetsClient:
     async def list_students(self, kode: str) -> list[tuple[str, str, str]]:
         return await self._run(partial(self._list_students, kode))
 
+    def _absen_coverage(self) -> dict[str, set[int]]:
+        """Per Kode: set of pertemuan (1-16) that have ANY student status filled,
+        aggregated across all absen blocks/tabs in ONE pass over cached rows."""
+        filled: dict[str, set[int]] = {}
+        for rows in self._all_absen_rows().values():
+            for i, r in enumerate(rows):
+                if not (r and r[0].strip() == "Kode Kelas" and len(r) > 1 and r[1].strip()):
+                    continue
+                kode = r[1].strip()
+                nh = -1
+                for j in range(i, min(i + 10, len(rows))):
+                    if rows[j] and rows[j][0].strip() == "NIM":
+                        nh = j
+                        break
+                if nh == -1:
+                    continue
+                s = filled.setdefault(kode, set())
+                for r2 in rows[nh + 2:]:
+                    if r2 and r2[0].strip() == "Program Studi":
+                        break
+                    for p in range(1, 17):
+                        col = 3 + (p - 1)
+                        if len(r2) > col and r2[col].strip():
+                            s.add(p)
+        return filled
+
+    async def absen_coverage(self) -> dict[str, set[int]]:
+        return await self._run(self._absen_coverage)
+
     def _locate_absen_block(self, kode: str) -> list[tuple[str, list[list[str]], int]]:
         """Return ALL absen blocks (title, rows, nim_header) matching a Kode across
         every prodi sheet — a class can have several blocks (multi-prodi), so we
