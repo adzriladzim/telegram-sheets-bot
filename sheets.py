@@ -1332,13 +1332,19 @@ class SheetsClient:
         loop = asyncio.get_running_loop()
         async with self._lock:  # serialize to dodge quota races
             try:
-                # 60s wall-clock cap. On timeout the lock is released (async with
-                # unwinds) — the executor thread keeps running but is orphaned, so
-                # no deadlock and no blocked event loop.
-                return await asyncio.wait_for(loop.run_in_executor(None, fn), timeout=60)
-            except asyncio.TimeoutError as exc:
-                log.exception("sheets call timed out")
-                raise SheetsError("Google Sheets timeout (60 detik) — coba lagi.") from exc
+                # 60s wall-clock cap. Shield the executor future: on timeout the
+                # thread keeps running, so we drain it *while still holding the
+                # lock* — otherwise its late write races the next call.
+                fut = loop.run_in_executor(None, fn)
+                try:
+                    return await asyncio.wait_for(asyncio.shield(fut), timeout=60)
+                except asyncio.TimeoutError as exc:
+                    log.exception("sheets call timed out")
+                    try:
+                        await fut
+                    except Exception:
+                        pass
+                    raise SheetsError("Google Sheets timeout (60 detik) — coba lagi.") from exc
             except SheetsError:
                 raise
             except gspread.exceptions.GSpreadException as exc:
