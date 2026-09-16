@@ -105,7 +105,7 @@ def _pertemuan_prompt_kb() -> InlineKeyboardMarkup:
 def _method_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("⌨️ Ketik NIM", callback_data="abm:nim"), InlineKeyboardButton("☑️ Checklist Nama", callback_data="abm:nama")],
-        [InlineKeyboardButton("📸 Upload Foto", callback_data="abm:foto")],
+        [InlineKeyboardButton("🔒 Upload Foto (Segera)", callback_data="abm:foto")],
         [InlineKeyboardButton("◀️ Kembali", callback_data="abm:back")],
     ])
 
@@ -159,13 +159,14 @@ async def pick_method(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     m = q.data.split(":",1)[1]
     if m == "back":
         return await back_to_pertemuan(update, context)
+    if m == "foto":
+        await q.message.reply_text(
+            "🔒 Fitur foto segera hadir — pakai ⌨️ NIM atau ☑️ Checklist dulu ya.",
+            reply_markup=_method_kb())
+        return METHOD
     context.user_data["absen_method"] = m
     back_kb = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Kembali", callback_data="abi:back")]])
-    if m == "foto":
-        context.user_data["input_from"] = "method"
-        await q.message.reply_text("Kirim foto daftar hadir (screenshot Zoom / absen):", reply_markup=back_kb)
-        return INPUT
-    elif m == "nim":
+    if m == "nim":
         context.user_data["input_from"] = "method"
         await q.message.reply_text("Ketik NIM (pisahkan koma, contoh: 26111600029, 26111600004):", reply_markup=back_kb)
         return INPUT
@@ -316,7 +317,9 @@ async def toggle_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 async def enter_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message.photo:
-        await update.effective_message.reply_text("📸 Foto diterima — fitur OCR segera. Untuk sekarang ketik NIM/Nama manual ya.")
+        await update.effective_message.reply_text(
+            "🔒 Fitur foto segera hadir — pakai ⌨️ NIM atau ☑️ Checklist dulu ya.\n"
+            "Ketik NIM/Nama manual (pisahkan koma):")
         return INPUT
     text = update.message.text.strip()
     import re
