@@ -10,18 +10,20 @@ from handlers import heartbeat, reminder
 import users
 
 HELP = (
-    "<b>Zoom Record Bot</b> — bot pencatat keseharian fasil di Cakrawala University.\n\n"
+    "<b>TelefasilBot</b> — asisten harian fasil Cakrawala University.\n\n"
+    "Semua urusan kelas dari chat ini: catat ngajar, absen, rekap, backup, "
+    "sampai jadwal. 👇\n\n"
     "<b>Perintah:</b>\n"
-    "• /register &lt;nama&gt; — set nama fasilitator\n"
-    "• /zoom — isi form Zoom Record\n"
-    "• /rekap — rekap kehadiran fasil\n"
+    "• /register &lt;nama&gt; — daftar nama fasilitator (cukup sekali)\n"
+    "• /zoom — catat kelas yang baru diajar\n"
     "• /absen — rekap kehadiran mahasiswa\n"
+    "• /rekap — rekap kehadiran fasil\n"
     "• /backup — izin & backup fasil\n"
     "• /cancel — lapor kelas cancel\n"
     "• /schedule — lihat jadwal minggu ini\n"
-    "• /help — bantuan ini\n"
-    "• /start — mulai ulang bot\n\n"
-    "<b>Reminder:</b> pesan otomatis tiap jam {wib} WIB (pagi = jadwal penuh, siang/sore = kelas yang belum di-log) + notif bot aktif 05:00 WIB.\n\n"
+    "• /help — bantuan ini\n\n"
+    "<b>Notif otomatis:</b> setiap jam {wib} WIB kami ingatkan — pagi jadwal "
+    "penuh, siang/sore kelas yang belum di-log. Santai, tinggal follow.\n\n"
     "Pembuat: <b>Adzril Adzim</b>\n"
     "LinkedIn: <a href='https://linkedin.com/in/adzriladzim'>Adzril Adzim</a>\n"
     "Instagram: <a href='https://instagram.com/adzradzen07'>@adzradzen07</a>"
@@ -63,10 +65,12 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         else "⚠️ Belum terdaftar.\nKetik /register <nama fasilitator> dulu, contoh:\n/register Adzril Adzim Hendrynov"
     )
     await update.message.reply_text(
-        f"👋 Halo {first}!\n\n{status}\n\n"
-        f"Aku bot pencatat keseharian fasil di Cakrawala University.\n"
-        f"Tekan tombol di bawah atau kirim /zoom untuk mencatat kelas hari ini.\n\n"
-        f"/help untuk daftar perintah.",
+        f"👋 Halo {first}!\n\n"
+        f"Aku <b>TelefasilBot</b> — asisten harian fasil Cakrawala: catat "
+        f"ngajar, absen, rekap, backup, sampai jadwal, semua dari chat ini.\n\n"
+        f"{status}\n\n"
+        f"Tekan tombol di bawah atau kirim /zoom untuk mulai mencatat kelas "
+        f"hari ini. 👇",
         reply_markup=_keyboard(),
     )
 

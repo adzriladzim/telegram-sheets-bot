@@ -1,5 +1,5 @@
-"""Offline stub — /stats redesign (8-block default, ringkas=blok1) + coverage
-pengisi-row fix. No live creds.
+"""Offline stub — /stats redesign (default RINGAN, detail=8 blok, ringkas=blok1)
++ coverage pengisi-row fix. No live creds.
 
 Run: py verify_stats_redesign.py   (expect: ALL PASS)
 
@@ -7,13 +7,16 @@ Checks:
   1. _absen_coverage skips the filler-name header row (WDC05-like block): a
      row with names only (no NIM/Nama) must NOT count as a filled meeting,
      and a block with only a pengisi name (no student status) stays 0/16.
-  2. _parse_args: 'ringkas' -> ringkas mode, 'detail' -> lengkap, none -> lengkap.
-  3. _build_summary (ringkas) renders ONLY block 1 (Ringkasan eksekutif) —
-     no Per menu/Roster/Jarang/Belum pernah/Aktivitas.
-  4. _build_detail (default) renders semua 8 blok berurutan: Ringkasan
-     eksekutif, Per menu, Roster semua fasil, Jarang pakai, Belum pernah
-     pakai, Kelengkapan/Tunggakan per fasil, Cakupan macet, Aktivitas 7 hari.
-  5. _chunks keeps every ringkas+detail chunk <=3500 bytes & HTML-parseable.
+  2. _parse_args: 'ringkas' -> ringkas mode, 'detail' -> lengkap, none -> ringan
+     (default ringan, detail lengkap).
+  3. _build_light (default) = RINGAN 1 bubble: eksekutif top-3 + Per menu 1
+     baris + Jarang pakai (nama saja) + Belum pernah (nama saja) — no roster/
+     matriks/cakupan/aktivitas.
+  4. _build_summary (ringkas) renders ONLY block 1 (Ringkasan eksekutif).
+  5. _build_detail renders semua 8 blok berurutan: Ringkasan eksekutif, Per
+     menu, Roster semua fasil, Jarang pakai, Belum pernah pakai,
+     Kelengkapan/Tunggakan per fasil, Cakupan macet, Aktivitas 7 hari.
+  6. _chunks keeps ringkas+ringan+detail chunks <=3500 bytes & HTML-parseable.
 """
 from __future__ import annotations
 
@@ -125,10 +128,10 @@ check("_parse_args detail -> lengkap", m == "lengkap", f"got {m!r}")
 m, days = stats._parse_args(["ringkas"])
 check("_parse_args ringkas -> ringkas", m == "ringkas", f"got {m!r}")
 m, days = stats._parse_args(["detail", "bulan"])
-check("_parse_args detail+bulan (alias default)", m == "lengkap" and days == 30, f"got {m},{days}")
+check("_parse_args detail+bulan", m == "lengkap" and days == 30, f"got {m},{days}")
 m, days = stats._parse_args(["minggu"])
-check("_parse_args period default lengkap", m == "lengkap" and days == 7, f"got {m},{days}")
-check("_parse_args none", stats._parse_args(None) == ("lengkap", 7), f"got {stats._parse_args(None)}")
+check("_parse_args period default ringan", m == "ringan" and days == 7, f"got {m},{days}")
+check("_parse_args none -> ringan", stats._parse_args(None) == ("ringan", 7), f"got {stats._parse_args(None)}")
 
 # ---------- 3+4. render ----------
 names = ["Adzril", "Budi", "Citra", "<Bold>"]
@@ -165,6 +168,23 @@ check("ringkas = ONLY block 1 (no detail blocks)",
       and "Jarang pakai" not in S_JOIN and "Belum pernah pakai" not in S_JOIN
       and "Aktivitas 7 hari" not in S_JOIN and "Cakupan absen" not in S_JOIN, S_JOIN)
 
+LT = stats._build_light(names, data, pdata, 7, per_menu, per_user, last_ts,
+                        matriks, arrears, cov)
+LT_JOIN = "\n".join(LT)
+check("light header ringan", "STATS BOT</b> — ringan" in LT_JOIN, LT_JOIN.splitlines()[0] if LT else "")
+check("light Aktif + aksi", "Aktif 2/4 fasil" in LT_JOIN and "⚡ 3 aksi" in LT_JOIN, LT_JOIN)
+check("light Sudah-log % + lewat", "Sudah-log 50% kelas" in LT_JOIN and "lewat 2" in LT_JOIN, LT_JOIN)
+check("light Perlu perhatian top + tertua", "Perlu perhatian" in LT_JOIN
+      and "Adzril — 2 tunggakan (tertua 08/09)" in LT_JOIN, LT_JOIN)
+check("light no '+N lain' (<=3 arrears fasil)", "+" not in LT_JOIN.split("fasil lain")[0] or "fasil lain" not in LT_JOIN, LT_JOIN)
+check("light Per menu satu baris", "Per menu</b> — log 1x · absen 1x · rekap 1x" in LT_JOIN, LT_JOIN)
+check("light Jarang pakai nama saja", "Jarang pakai</b> (kurang dari 3 aksi/7 hari terakhir): Adzril, Budi" in LT_JOIN, LT_JOIN)
+check("light Belum pernah hitung", "Belum pernah pakai (2)</b>: Citra, &lt;Bold&gt;" in LT_JOIN, LT_JOIN)
+check("light escaped name", "&lt;Bold&gt;" in LT_JOIN and "<Bold>" not in LT_JOIN, LT_JOIN)
+check("light = NO detail blocks", "Roster semua fasil" not in LT_JOIN
+      and "Cakupan absen" not in LT_JOIN and "Aktivitas 7 hari" not in LT_JOIN
+      and "Tunggakan per fasil" not in LT_JOIN, LT_JOIN)
+
 D = stats._build_detail(names, data, pdata, 7, per_menu, per_user, last_ts,
                         matriks, arrears, cov)
 D_JOIN = "\n".join(D)
@@ -197,7 +217,7 @@ def fake_parse(text):
 
 
 ok_chunks = True
-for label, lines in (("summary", S), ("detail", D)):
+for label, lines in (("summary", S), ("light", LT), ("detail", D)):
     for i, (part, pm) in enumerate(stats._chunks(lines)):
         b = stats._b(part)
         if b > 3500 or b >= 4096:
@@ -209,7 +229,10 @@ for label, lines in (("summary", S), ("detail", D)):
             except ValueError:
                 ok_chunks = False
                 print(f"  FAIL chunk {label}[{i}] unparseable HTML")
-check("summary+detail chunks <=3500 bytes & parseable", ok_chunks)
+check("summary+light+detail chunks <=3500 bytes & parseable", ok_chunks)
+
+lt_chunks = stats._chunks(LT)
+check("light default = 1-2 bubble", len(lt_chunks) <= 2, f"got {len(lt_chunks)} chunks")
 
 print("\n" + ("ALL PASS" if not FAIL else f"{len(FAIL)} FAIL"))
 sys.exit(1 if FAIL else 0)

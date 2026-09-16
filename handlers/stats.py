@@ -1,10 +1,12 @@
 """/stats [ringkas|detail] [minggu|bulan|semua] — admin only.
 
-Default (dan alias `/stats detail`) = laporan lengkap 8 blok berurutan:
-(1) ringkasan eksekutif, (2) Per menu, (3) Roster semua fasil,
-(4) Jarang pakai, (5) Belum pernah pakai, (6) Tunggakan per fasil,
-(7) Cakupan absen macet saja, (8) Aktivitas 7 hari.
-`/stats ringkas` = hanya blok (1) ringkasan eksekutif.
+Default = RINGAN (1-2 bubble): ringkasan eksekutif (aktif X/Y, sudah-log %,
+🔴 top-3 tunggakan + tertua) + Per menu 1 baris + Jarang pakai (nama saja)
++ Belum pernah pakai (nama saja, hitung).
+`/stats detail` = laporan lengkap 8 blok: ringkasan eksekutif, per menu,
+roster semua fasil, jarang pakai, belum pernah, kelengkapan minggu ini &
+tunggakan per fasil, cakupan absen macet, aktivitas 7 hari.
+`/stats ringkas` = alias minimal: hanya blok ringkasan eksekutif.
 """
 from __future__ import annotations
 
@@ -290,6 +292,57 @@ def _build_summary(names: list[str], data: list[dict], pdata: list[dict], days: 
         names, pdata, days, per_user, matriks, arrears, cov)
 
 
+def _build_light(names: list[str], data: list[dict], pdata: list[dict], days: int,
+                 per_menu: Counter, per_user: dict, last_ts: dict,
+                 matriks: list, arrears: list, cov: dict | None) -> list[str]:
+    """Default `/stats` — RINGAN: eksekutif (top-3 tunggakan) + Per menu 1 baris
+    + Jarang pakai (nama saja) + Belum pernah (nama saja). Roster/matriks/
+    tunggakan lengkap/cakupan/aktivitas ada di `/stats detail`."""
+    active = sum(1 for n in names if sum(per_user[n].values()) > 0)
+    ever = {e.get("name") for e in data if isinstance(e, dict) and isinstance(e.get("name"), str)}
+    never = [n for n in names if n not in ever]
+    rare, thr = _rare_facil(names, data, per_user, days)
+
+    by_name: dict[str, list] = defaultdict(list)
+    for name, c, label, pn, cmpd in arrears:
+        by_name[name].append((c.code, label, pn, cmpd))
+    top = sorted(by_name, key=lambda n: (-len(by_name[n]), n))[:3]
+
+    L = [
+        "📊 <b>STATS BOT</b> — ringan",
+        f"👥 Aktif {active}/{len(names)} fasil · ⚡ {len(pdata)} aksi ({_PERIOD_LABEL[days]})",
+        f"⚡ Sudah-log {_log_pct(matriks)}% kelas · ⏳ lewat {len(arrears)}",
+        "",
+    ]
+    if top:
+        L.append("🔴 <b>Perlu perhatian</b>")
+        for name in top:
+            items = by_name[name]
+            dates = [_arr_date(d) for _k, _l, _p, d in items]
+            dates = [d for d in dates if d is not None]
+            oldest = min(dates).strftime("%d/%m") if dates else "?"
+            L.append(f"• {html.escape(name)} — {len(items)} tunggakan (tertua {oldest})")
+        if len(by_name) > 3:
+            L.append(f"… +{len(by_name) - 3} fasil lain — lihat /stats detail")
+    else:
+        L.append("🟢 Tidak ada tunggakan")
+
+    if per_menu:
+        parts = " · ".join(f"{html.escape(ACT_LABEL.get(m, m))} {per_menu[m]}x"
+                           for m in ACT_ORDER if m in per_menu)
+        L.append(f"<b>Per menu</b> — {parts}")
+    else:
+        L.append("<b>Per menu</b> — (belum ada aksi periode ini)")
+
+    if rare:
+        L.append(f"<b>Jarang pakai</b> (kurang dari {thr} aksi/{_PERIOD_LABEL[days]}): "
+                 + ", ".join(html.escape(n) for n in sorted(rare)))
+    if never:
+        L.append(f"<b>Belum pernah pakai ({len(never)})</b>: "
+                 + ", ".join(html.escape(n) for n in never))
+    return L
+
+
 def _build_detail(names: list[str], data: list[dict], pdata: list[dict], days: int,
                   per_menu: Counter, per_user: dict, last_ts: dict,
                   matriks: list, arrears: list, cov: dict | None) -> list[str]:
@@ -364,9 +417,9 @@ def _build_detail(names: list[str], data: list[dict], pdata: list[dict], days: i
 
 
 def _parse_args(args: list[str] | None) -> tuple[str, int]:
-    """(mode, days); mode: \"ringkas\" | \"lengkap\" (detail = alias lengkap)."""
+    """(mode, days); mode: "ringkas" | "ringan" (default) | "lengkap" (detail)."""
     args = args or []
-    mode = "lengkap"
+    mode = "ringan"
     period_arg = None
     for a in args:
         k = a.strip().casefold()
@@ -426,6 +479,9 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if mode == "ringkas":
         L = _build_summary(names, data, pdata, days, per_menu, per_user, last_ts,
                            matriks, arrears, cov)
+    elif mode == "ringan":
+        L = _build_light(names, data, pdata, days, per_menu, per_user, last_ts,
+                         matriks, arrears, cov)
     else:
         L = _build_detail(names, data, pdata, days, per_menu, per_user, last_ts,
                           matriks, arrears, cov)
