@@ -151,7 +151,7 @@ Tap salah satu → `✅ Terdaftar sebagai: Ratu Bilqis`
 
 ### 3.3 `/zoom` — isi Zoom Record
 
-**Alias:** `/log`, `/zoom_record`. Mencatat kelas yang sudah didampingi ke tab **Zoom Record** (14 kolom: tanggal pengisian, fasil, tanggal kelas, semester, kelas, mata kuliah, pertemuan, skema, SKS, tipe, dosen, jam mulai, Zoom, catatan).
+**Alias:** `/log`, `/zoom_record`. Mencatat kelas yang sudah berjalan ke tab **Zoom Record** (14 kolom: tanggal pengisian, fasil, tanggal kelas, semester, kelas, mata kuliah, pertemuan, skema, SKS, tipe, dosen, jam mulai, Zoom, catatan).
 
 **Alur step-by-step:**
 

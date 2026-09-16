@@ -17,7 +17,7 @@ HELP = (
     "sampai jadwal. 👇\n\n"
     "<b>Perintah:</b>\n"
     "• /register &lt;nama&gt; — daftar nama fasilitator (cukup sekali)\n"
-    "• /zoom — catat log pendampingan kelas baru\n"
+    "• /zoom — simpan record Zoom kelas\n"
     "• /absen — rekap kehadiran mahasiswa\n"
     "• /rekap — rekap kehadiran fasil\n"
     "• /backup — izin & backup fasil\n"
