@@ -791,7 +791,8 @@ class SheetsClient:
                 "rows": blocks[0][1] if blocks else [],
                 "nim_header": blocks[0][2] if blocks else -1}
 
-    def _update_absen(self, kode: str, pertemuan: int, identifiers: list[str], status: str) -> dict:
+    def _update_absen(self, kode: str, pertemuan: int, identifiers: list[str], status: str,
+                      pengisi: str = "") -> dict:
         res = self._resolve_absen(kode, identifiers)
         if not 1 <= pertemuan <= 16:
             raise SheetsError("Pertemuan harus 1-16")
@@ -804,24 +805,44 @@ class SheetsClient:
             data.append({"range": f"{_q(title)}!{col_letter}{r_idx+1}", "values": [[status]]})
             written_titles.add(title)
             updated += 1
+        # Sheet convention (client manual habit): the header cell of the meeting
+        # column (row nim_header, col D..S) holds the full name of the facilitator
+        # who filled it — overwrite in place, last filler wins. One write per
+        # touched block so a multi-prodi class is stamped in every sheet.
+        pengisi = (pengisi or "").strip()
+        header_cells: list[str] = []
+        if data and pengisi:
+            # A tab can hold several blocks of the same kode — stamp each one.
+            nim_headers: dict[str, list[int]] = {}
+            for t, _rows, nh in res["blocks"]:
+                nim_headers.setdefault(t, []).append(nh)
+            for title in sorted(written_titles):
+                for nh in nim_headers.get(title, []) or []:
+                    if nh >= 0:
+                        header_cells.append(f"{_q(title)}!{col_letter}{nh + 1}")
+                        data.append({"range": header_cells[-1], "values": [[pengisi]]})
         if data:
             self._ss(self.cfg.absen_sheet_id).values_batch_update(
                 {"valueInputOption": "USER_ENTERED", "data": data})
             for title in written_titles:
                 self._invalidate_rows(self.cfg.absen_sheet_id, title)
         self._invalidate_absen_students(kode)
-        log.info("Updated absen %s pertemuan %d status %s: %d rows (%s)",
-                 kode, pertemuan, status, updated, ",".join(sorted(written_titles)) or "-")
+        log.info("Updated absen %s pertemuan %d status %s: %d rows (%s)%s",
+                 kode, pertemuan, status, updated, ",".join(sorted(written_titles)) or "-",
+                 f" pengisi={pengisi}" if pengisi else "")
         if updated == 0 and not res["ambiguous"] and not res["unmatched"]:
             raise SheetsError("Tidak ada NIM/Nama yang cocok")
         return {"updated": updated, "ambiguous": res["ambiguous"],
                 "unmatched": res["unmatched"],
                 "names": [nm for _, _, nm, _, _ in res["matched"][:10]],
                 "sheets": sorted(written_titles),
-                "sheet": res["title"]}
+                "sheet": res["title"],
+                "pengisi": pengisi,
+                "header_cells": header_cells}
 
-    async def update_absen(self, kode: str, pertemuan: int, identifiers: list[str], status: str) -> dict:
-        return await self._run(partial(self._update_absen, kode, pertemuan, identifiers, status))
+    async def update_absen(self, kode: str, pertemuan: int, identifiers: list[str], status: str,
+                           pengisi: str = "") -> dict:
+        return await self._run(partial(self._update_absen, kode, pertemuan, identifiers, status, pengisi))
 
     def _fetch_backup_classes(self, facilitator_name: str) -> list[ClassEntry]:
         """Classes where facilitator is listed as Fasil Pengganti in Backup sheet."""

@@ -361,11 +361,22 @@ async def back_to_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await q.message.reply_text(f"Pilih status ({n} mahasiswa):", reply_markup=_status_kb())
     return STATUS
 
+_REQUIRED_KEYS = ("absen_kode", "absen_pertemuan", "absen_identifiers", "absen_status")
+
 async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query; await q.answer()
+    # Stale-session guard: conversation may have ended (timeout / done elsewhere /
+    # previous double-tap). Indexing user_data without the keys raises KeyError.
+    if any(k not in context.user_data for k in _REQUIRED_KEYS):
+        try: await q.edit_message_reply_markup(reply_markup=None)
+        except Exception: pass
+        await q.message.reply_text("Sesi absen sudah selesai — kirim /absen untuk yang baru.")
+        return ConversationHandler.END
     # Per-chat lock (see handlers/log.py confirm_cb).
     async with _sheets(context).for_chat(update.effective_chat.id):
         if q.data.endswith(":no"):
+            try: await q.edit_message_reply_markup(reply_markup=None)
+            except Exception: pass
             await q.message.reply_text("Dibatalkan.")
             return ConversationHandler.END
         kode = context.user_data["absen_kode"]
@@ -374,7 +385,8 @@ async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         status = context.user_data["absen_status"]
         busy = await q.message.reply_text("⏳ Menyimpan absen ke sheet...")
         try:
-            res = await _sheets(context).update_absen(kode, per, ids, status)
+            pengisi = users.get(update.effective_chat.id) or ""
+            res = await _sheets(context).update_absen(kode, per, ids, status, pengisi=pengisi)
         except sheets.SheetsError as e:
             try: await busy.delete()
             except Exception: pass
@@ -389,10 +401,18 @@ async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             extra += f"\n⚠️ Ambigu (pakai NIM penuh): {amb}"
         if res["unmatched"]:
             extra += f"\n❌ Tak ketemu: {', '.join(res['unmatched'][:5])}"
-        await q.message.reply_text(f"✅ Absen tercatat: {kode} pertemuan {per} → {n} mahasiswa status {status}{extra}")
+        nama_pengisi = res.get("pengisi") or "-"
+        await q.message.reply_text(f"✅ Absen tercatat: {kode} pertemuan {per} → {n} mahasiswa status {status}"
+                                   f"\n👤 Pengisi: {nama_pengisi}{extra}")
+        # Drop the buttons so a second tap of ✅ Submit can't re-enter and blow up
+        # on cleared user_data (double-tap -> KeyError -> 2x "kesalahan internal").
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
         # Log usage
         import usage
-        try: usage.log(update.effective_chat.id, users.get(update.effective_chat.id) or "", "absen", kode,
+        try: usage.log(update.effective_chat.id, nama_pengisi, "absen", kode,
                        pertemuan=per, status=status, jumlah=len(ids))
         except Exception: pass
         context.user_data.clear()
