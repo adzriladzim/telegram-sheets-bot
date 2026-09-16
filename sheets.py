@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import socket
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -327,6 +328,10 @@ class SheetsClient:
         self._gc: gspread.Client | None = None
         self._lock = asyncio.Lock()  # single-flight for ALL gspread I/O
         self._chat_locks: dict[int, asyncio.Lock] = {}
+        # Safety net (jaring terakhir): global socket default so any Google call
+        # that misses its explicit per-client timeout can't block a thread
+        # forever. Explicit timeouts are also set below (gspread/Drive).
+        socket.setdefaulttimeout(30)
 
     # ---------- sync internals ----------
 
@@ -334,6 +339,9 @@ class SheetsClient:
         if self._gc is None:
             creds = Credentials.from_service_account_file(str(self.cfg.service_account_json), scopes=SCOPES)
             self._gc = gspread.authorize(creds)
+            # HTTPClient timeout (connect, read): without it a wedged request
+            # holds the single-flight lock forever -> bot goes silent.
+            self._gc.set_timeout((10, 30))
         return self._gc
 
     def _ss(self, ss_id: str) -> gspread.Spreadsheet:
@@ -1318,9 +1326,13 @@ class SheetsClient:
     def _upload_bukti(self, data: bytes, filename: str, mimetype: str, facilitator: str = "") -> str:
         from googleapiclient.discovery import build
         from googleapiclient.http import MediaIoBaseUpload
+        from google_auth_httplib2 import AuthorizedHttp
+        import httplib2
         import io
         creds = Credentials.from_service_account_file(str(self.cfg.service_account_json), scopes=SCOPES)
-        drive = build("drive", "v3", credentials=creds)
+        # httplib2 timeout bounds every Drive request (incl. discovery fetch).
+        drive = build("drive", "v3",
+                      http=AuthorizedHttp(creds, http=httplib2.Http(timeout=30)))
         folder = self._bukti_folder_for(drive, facilitator.strip() or "Lainnya")
         media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mimetype or "image/jpeg")
         f = drive.files().create(body={"name": filename, "parents": [folder]},
@@ -1361,7 +1373,16 @@ class SheetsClient:
 
     async def _run(self, fn):
         loop = asyncio.get_running_loop()
-        async with self._lock:  # serialize to dodge quota races
+        # Acquire the single-flight lock with a cap: a wedged holder (stuck
+        # executor thread) must not queue every future Sheets call behind this
+        # lock forever — that is the "DIAM TOTAL" failure. Timed out -> we did
+        # NOT acquire, so nothing to release here.
+        try:
+            await asyncio.wait_for(self._lock.acquire(), timeout=90)
+        except asyncio.TimeoutError as exc:
+            log.error("sheets lock busy >90s — backing off")
+            raise SheetsError("Google sibuk/antri penuh — coba lagi sebentar.") from exc
+        try:
             try:
                 # 60s wall-clock cap. Shield the executor future: on timeout the
                 # thread keeps running, so we drain it *while still holding the
@@ -1372,7 +1393,11 @@ class SheetsClient:
                 except asyncio.TimeoutError as exc:
                     log.exception("sheets call timed out")
                     try:
-                        await fut
+                        # Cap the drain too (30s): a truly wedged thread must
+                        # not hold the lock forever. We let go; the late write
+                        # may race the next call, but a silent total hang is
+                        # worse — users get an error they can retry on.
+                        await asyncio.wait_for(fut, timeout=30)
                     except BaseException:
                         pass  # drain: swallow CancelledError/anything from the kept-running thread
                     raise SheetsError("Google Sheets timeout (60 detik) — coba lagi.") from exc
@@ -1394,6 +1419,8 @@ class SheetsClient:
             except Exception as exc:
                 log.exception("unexpected sheets failure")
                 raise SheetsError("Terjadi kesalahan saat mengakses Google Sheets. Coba lagi.") from exc
+        finally:
+            self._lock.release()
 
 
 def this_week_classes(classes: list[ClassEntry]) -> dict[str, list[ClassEntry]]:
