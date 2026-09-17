@@ -141,10 +141,10 @@ async def _weekly_sections(sc, names: list[str]) -> tuple[list, list]:
     today = datetime.now(sheets.WIB).date()
     for name in names:
         try:
-            personal, backup = await sc.get_all_loggable_classes(name)
+            personal, backup, makeup = await sc.get_all_loggable_classes(name)
         except sheets.SheetsError:
             continue
-        classes = personal + backup
+        classes = personal + backup + makeup
         if not classes:
             continue
         try:
@@ -157,7 +157,7 @@ async def _weekly_sections(sc, names: list[str]) -> tuple[list, list]:
             complete = set()
         row = []
         for c in classes:
-            if c.category == "Backup" and c.backup_hari_tanggal:
+            if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
                 cmpd = _parse_backup_date(c.backup_hari_tanggal)
             else:
                 cmpd = sheets.next_date_for_day(c.day)
@@ -182,7 +182,7 @@ async def _weekly_sections(sc, names: list[str]) -> tuple[list, list]:
             row.append((c.code, lm, rm))
             if lm == "✗":
                 label = (f"{c.day} {sheets.tanggal_panjang(cmpd)}"
-                         if c.category != "Backup" else c.backup_hari_tanggal)
+                         if c.category not in ("Backup", "Make-up") else c.backup_hari_tanggal)
                 pn = None
                 try:
                     _, nxt, _ = await sc.get_next_meeting(c.code)

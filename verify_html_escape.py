@@ -182,7 +182,8 @@ async def sim_schedule():
     ctx = SimpleNamespace(
         bot=CaptureBot(),
         bot_data={"sheets": SimpleNamespace(
-            get_all_loggable_classes=async_gen([ce(day=today, category="Backup")], []),
+            get_all_loggable_classes=async_gen([ce(day=today, category="Backup")], [], []),
+            get_makeup_notes=async_gen({}),
         )},
     )
     with patch("handlers.schedule.users.get", return_value=E), \
@@ -283,15 +284,15 @@ async def sim_reminder():
     send = []
     bot.send_message = lambda cid, text, **k: (send.append((cid, text, k)), asyncio.sleep(0))[1]
     job = SimpleNamespace(chat_id=1, name="reminder:1:2100")
-    async def get_classes(f):
-        return [ce(day="Senin")]
+    async def get_all_loggable_classes(f):
+        return ([ce(day="Senin")], [], [])
     async def get_done_by_date(f):
         return set()
     ctx = SimpleNamespace(
         job=job, bot=bot,
         bot_data={"cfg": SimpleNamespace(reminder_slots=[(21, 0), (12, 0), (20, 0)]),
                   "sheets": SimpleNamespace(
-                      get_classes=get_classes,
+                      get_all_loggable_classes=get_all_loggable_classes,
                       get_done_by_date=get_done_by_date,
                   )},
     )

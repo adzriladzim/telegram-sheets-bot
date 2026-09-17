@@ -71,8 +71,8 @@ class FakeSheets:
     def __init__(self, classes, done):
         self.classes, self.done = classes, done
 
-    async def get_classes(self, facilitator):
-        return self.classes
+    async def get_all_loggable_classes(self, facilitator):
+        return (self.classes, [], [])
 
     async def get_done_by_date(self, facilitator):
         return self.done

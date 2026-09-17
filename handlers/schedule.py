@@ -25,13 +25,14 @@ async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     busy = await st.loading(update, context, "⏳ Ambil jadwal dari sheet...")
     try:
-        personal, backup = await context.bot_data["sheets"].get_all_loggable_classes(facilitator)
+        personal, backup, makeup = await context.bot_data["sheets"].get_all_loggable_classes(facilitator)
+        makeup_notes = await context.bot_data["sheets"].get_makeup_notes(facilitator)
     except sheets.SheetsError as exc:
         await st.unbusy(busy)
         await update.effective_message.reply_text(f"⚠️ {exc}")
         return
     await st.unbusy(busy)
-    classes = personal + backup
+    classes = personal + backup + makeup
     if not classes:
         await update.effective_message.reply_text(f"Tidak ada kelas terdaftar untuk {facilitator} (jadwal + backup kosong).")
         return
@@ -42,7 +43,13 @@ async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     lines = ["🗓 <b>Jadwal Kelas Minggu Ini</b>", ""]
     for day in sheets.DAY_ORDER:
         for c in by_day.get(day, []):
-            if c.category == "Backup":
+            if c.category == "Make-up":
+                mark = " ← <b>HARI INI</b>" if _parse_backup_date(c.backup_hari_tanggal) == today_full else ""
+                lines.append(
+                    f"<b>{day}</b>🧪 {html.escape(c.code)} — {html.escape(c.subject)} ({html.escape(str(c.backup_hari_tanggal))}){mark}\n"
+                    f"  🏫 {html.escape(c.room)} | 👤 {html.escape(c.lecturer)} | {html.escape(c.zoom_label)}"
+                )
+            elif c.category == "Backup":
                 mark = " ← <b>HARI INI</b>" if _parse_backup_date(c.backup_hari_tanggal) == today_full else ""
                 lines.append(
                     f"<b>{day}</b>🔄 {html.escape(c.code)} — {html.escape(c.subject)} ({html.escape(str(c.backup_hari_tanggal))}){mark}\n"
@@ -55,6 +62,12 @@ async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     f"  {html.escape(c.code)} — {html.escape(c.subject)}\n"
                     f"  🏫 {html.escape(c.room)} | 👤 {html.escape(c.lecturer)} | {html.escape(c.zoom_label)}"
                 )
+                # Kelas milik user yang di-cancel (ada di tab Cancel, I match) dan
+                # punya jadwal make-up (L) → catatan di baris jadwal aslinya.
+                note = makeup_notes.get(c.code.casefold())
+                if note:
+                    tgl, fasil = note
+                    lines.append(f"  🧪 make-up {html.escape(tgl)}, {html.escape(fasil)}")
             lines.append("")
     missing = [c.code for c in classes if not sheets.this_week_classes([c])]
     if missing:

@@ -29,9 +29,10 @@ async def cmd_absen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
     loading = await update.effective_message.reply_text("⏳ Ambil daftar kelas...")
     try:
-        personal, backup = await _sheets(context).get_all_loggable_classes(name)
-        my_classes = personal + backup
+        personal, backup, makeup = await _sheets(context).get_all_loggable_classes(name)
+        my_classes = personal + backup + makeup
         backup_kodes = {c.code for c in backup}
+        makeup_kodes = {c.code for c in makeup}
         my_kodes = {c.code for c in my_classes}
     except sheets.SheetsError as e:
         try: await loading.delete()
@@ -56,24 +57,26 @@ async def cmd_absen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["absen_my_today"] = my_today
     context.user_data["absen_my_other"] = my_other
     context.user_data["absen_backup"] = backup_kodes
-    kb = _kode_kb(my_today, my_other, today, backup_kodes)
+    context.user_data["absen_makeup"] = makeup_kodes
+    kb = _kode_kb(my_today, my_other, today, backup_kodes, makeup_kodes)
     await update.effective_message.reply_text(f"1️⃣ Pilih Kode Kelas: ({len(my_today)} hari ini)", reply_markup=kb)
     context.user_data["absen_kodes"] = list(my_kodes)
     return KODE
 
 
-def _kode_kb(my_today, my_other, today, backup=None) -> InlineKeyboardMarkup:
+def _kode_kb(my_today, my_other, today, backup=None, makeup=None) -> InlineKeyboardMarkup:
     backup = backup or set()
+    makeup = makeup or set()
     kb = []
     if my_today:
         kb.append([InlineKeyboardButton(f"— Hari Ini ({today}) —", callback_data="abk:header")])
         for k in my_today:
-            mark = "🔄" if k in backup else "⭐"
+            mark = "🧪" if k in makeup else ("🔄" if k in backup else "⭐")
             kb.append([InlineKeyboardButton(f"{mark} {k} (hari ini)", callback_data=f"abk:{k}")])
     if my_other:
         kb.append([InlineKeyboardButton("— Kelas Lain Saya —", callback_data="abk:header2")])
         for k in my_other[:15]:
-            mark = "🔄" if k in backup else "⭐"
+            mark = "🧪" if k in makeup else ("🔄" if k in backup else "⭐")
             kb.append([InlineKeyboardButton(f"{mark} {k}", callback_data=f"abk:{k}")])
     kb.append([InlineKeyboardButton("⌨️ Ketik Kode Lain", callback_data="abk:manual")])
     kb.append([InlineKeyboardButton("❌ Batal", callback_data="abk:cancel")])
@@ -87,7 +90,8 @@ async def back_to_kode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     my_other = context.user_data.get("absen_my_other", [])
     today = context.user_data.get("absen_today", "")
     backup = context.user_data.get("absen_backup", set())
-    await q.message.reply_text("1️⃣ Pilih Kode Kelas:", reply_markup=_kode_kb(my_today, my_other, today, backup))
+    makeup = context.user_data.get("absen_makeup", set())
+    await q.message.reply_text("1️⃣ Pilih Kode Kelas:", reply_markup=_kode_kb(my_today, my_other, today, backup, makeup))
     return KODE
 
 

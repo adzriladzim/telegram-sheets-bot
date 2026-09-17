@@ -80,6 +80,16 @@ WIB = timezone(timedelta(hours=7), name="WIB")
 COL_DAY, COL_FASIL, COL_KATEGORI, COL_JAM, COL_KODE = 0, 1, 2, 3, 4
 COL_MK, COL_DOSEN, COL_RUANG, COL_ROMBEL, COL_SKS, COL_ZOOM_NO, COL_ZOOM_LINK, COL_KETERANGAN = 5, 6, 7, 8, 9, 10, 11, 12
 
+# Cancel sheet columns (0-indexed, tab 'Kelas Cancel & Pengganti' — bot READ-ONLY:
+# TIDAK pernah menulis kolom J..R di tab ini; make-up hanya dibaca):
+# A No. B Dosen C Matkul D Kode E Sesi F JadwalAwal G Jam H SKS I Fasil(cancel)
+# J StatusTerlaksana(T/F) K kosong L Jadwal Make-up M Jam N Fasil(make-up)
+# O Zoom(nomor) P Zoom(link) Q Room R Ket.
+CNL_DOSEN, CNL_MATKUL, CNL_KODE = 1, 2, 3
+CNL_SESI, CNL_JADWAL_AWAL, CNL_JAM, CNL_SKS = 4, 5, 6, 7
+CNL_FASIL, CNL_STATUS, CNL_JADWAL_MAKEUP, CNL_JAM_MAKEUP = 8, 9, 11, 12
+CNL_FASIL_MAKEUP, CNL_ZOOM_NO, CNL_ZOOM_LINK, CNL_ROOM, CNL_KET = 13, 14, 15, 16, 17
+
 TIPE_KELAS_MAP = {"reguler": "Reguler", "professional": "Professional", "akselerasi": "Akselerasi", "akselerasi & professional": "Akselerasi & Professional", "professional & akselerasi": "Akselerasi & Professional", "pro": "Professional", "ae": "Akselerasi", "ae & pro": "Akselerasi & Professional", "pro & ae": "Akselerasi & Professional"}
 DAY_ORDER = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
 
@@ -1036,6 +1046,37 @@ class SheetsClient:
                            pengisi: str = "") -> dict:
         return await self._run(partial(self._update_absen, kode, pertemuan, identifiers, status, pengisi))
 
+    def _master_lookup(self, kode: str, room_key: str = "") -> tuple[str, str, str, str]:
+        """(zoom_no, sks, semester, ket_master) from master sheet by kode.
+        Kode can repeat across RomBel: collect ALL master rows with that kode,
+        prefer the one whose RomBel (col 8) matches room_key, else first match."""
+        try:
+            mrows = self._cached_rows(self.cfg.sheet_id, self.cfg.master_sheet)
+        except SheetsError:
+            return "", "", "", ""
+        candidates = [
+            mr for mr in mrows
+            if len(mr) > COL_KODE and mr[COL_KODE].strip().casefold() == kode.casefold()
+        ]
+        chosen = None
+        rk = self._normalize(room_key)
+        if rk:
+            for mr in candidates:
+                if len(mr) > COL_ROMBEL and self._normalize(mr[COL_ROMBEL]) == rk:
+                    chosen = mr
+                    break
+        if chosen is None and candidates:
+            chosen = candidates[0]  # fallback: first kode match
+        if chosen is None:
+            return "", "", "", ""
+        zoom_no = chosen[COL_ZOOM_NO].strip() if len(chosen) > COL_ZOOM_NO else ""
+        sks = chosen[COL_SKS].strip() if len(chosen) > COL_SKS else ""
+        rombel_tmp = chosen[COL_ROMBEL].strip() if len(chosen) > COL_ROMBEL else ""
+        sems = sorted(set(re.findall(r"\b(\d+)\b", rombel_tmp)))
+        semester = " & ".join(sems) if sems else ""
+        ket_master = chosen[COL_KETERANGAN].strip() if len(chosen) > COL_KETERANGAN else ""
+        return zoom_no, sks, semester, ket_master
+
     def _fetch_backup_classes(self, facilitator_name: str) -> list[ClassEntry]:
         """Classes where facilitator is listed as Fasil Pengganti in Backup sheet."""
         try:
@@ -1056,35 +1097,15 @@ class SheetsClient:
                 continue
             hari_tanggal = row[2].strip() if len(row) > 2 else ""  # Col C
             day = hari_tanggal.split(",")[0].strip() if "," in hari_tanggal else hari_tanggal.split()[0] if hari_tanggal else ""
-            # Lookup zoom/sks/semester/keterangan from master by kode for backup class.
-            # Kode can repeat across RomBel: collect every master row with that kode,
-            # prefer the one whose RomBel (col 8) matches backup Col H, else first match.
+            # Lookup zoom/sks/semester/keterangan from master by kode (rombel-match
+            # prefer backup Col H = room/rombel, else first kode match).
             zoom_no = ""
             sks = ""
             semester = ""
             ket_master = ""
             try:
-                mrows = self._cached_rows(self.cfg.sheet_id, self.cfg.master_sheet)
-                candidates = [
-                    mr for mr in mrows
-                    if len(mr) > COL_KODE and mr[COL_KODE].strip().casefold() == kode.casefold()
-                ]
-                chosen = None
-                room_key = self._normalize(row[7]) if len(row) > 7 else ""
-                if room_key:
-                    for mr in candidates:
-                        if len(mr) > COL_ROMBEL and self._normalize(mr[COL_ROMBEL]) == room_key:
-                            chosen = mr
-                            break
-                if chosen is None and candidates:
-                    chosen = candidates[0]  # fallback: first kode match
-                if chosen is not None:
-                    zoom_no = chosen[COL_ZOOM_NO].strip() if len(chosen) > COL_ZOOM_NO else ""
-                    sks = chosen[COL_SKS].strip() if len(chosen) > COL_SKS else ""
-                    rombel_tmp = chosen[COL_ROMBEL].strip() if len(chosen) > COL_ROMBEL else ""
-                    sems = sorted(set(re.findall(r"\b(\d+)\b", rombel_tmp)))
-                    semester = " & ".join(sems) if sems else ""
-                    ket_master = chosen[COL_KETERANGAN].strip() if len(chosen) > COL_KETERANGAN else ""
+                zoom_no, sks, semester, ket_master = self._master_lookup(
+                    kode, row[7].strip() if len(row) > 7 else "")
             except Exception as exc:
                 log.warning("backup master lookup failed: %s", exc)
             out.append(ClassEntry(
@@ -1110,11 +1131,105 @@ class SheetsClient:
     async def get_backup_classes(self, facilitator_name: str) -> list[ClassEntry]:
         return await self._run(partial(self._fetch_backup_classes, facilitator_name))
 
-    async def get_all_loggable_classes(self, facilitator_name: str) -> tuple[list[ClassEntry], list[ClassEntry]]:
-        """Return (personal classes, backup classes)."""
+    def _fetch_makeup_classes(self, facilitator_name: str) -> list[ClassEntry]:
+        """Make-up classes from Cancel tab — READ-ONLY (bot never writes J..R).
+
+        Baris = kelas yang di-cancel lalu dijadwalkan ulang (make-up). Filter:
+        B (dosen) terisi, L (jadwal make-up) terisi, J (status terlaksana)
+        casefold != 'true', N (fasil make-up) match nama (partial, spt backup)."""
+        try:
+            rows = self._cached_rows(self.cfg.sheet_id, self.cfg.cancel_sheet)
+        except SheetsError:
+            return []
+        target = self._normalize(facilitator_name)
+        out: list[ClassEntry] = []
+        for i, row in enumerate(rows):
+            if i == 0 or len(row) <= CNL_KET:
+                continue  # header + short rows
+            dosen = row[CNL_DOSEN].strip() if len(row) > CNL_DOSEN else ""
+            if not dosen:
+                continue
+            status = row[CNL_STATUS].strip().casefold() if len(row) > CNL_STATUS else ""
+            # J StatusTerlaksana: 'true'/'t' = kelas sudah terlaksana — bukan make-up
+            # lagi. Live header pakai T/F; 'TRUE' juga ditangkap.
+            if status in ("true", "t"):
+                continue  # kelas sudah terlaksana — bukan make-up lagi
+            hari_tanggal = row[CNL_JADWAL_MAKEUP].strip() if len(row) > CNL_JADWAL_MAKEUP else ""
+            if not hari_tanggal:
+                continue
+            fasil_makeup = row[CNL_FASIL_MAKEUP].strip() if len(row) > CNL_FASIL_MAKEUP else ""
+            if not fasil_makeup or target not in self._normalize(fasil_makeup):
+                continue
+            kode = row[CNL_KODE].strip() if len(row) > CNL_KODE else ""
+            if not kode:
+                continue
+            day = (hari_tanggal.split(",")[0].strip() if "," in hari_tanggal
+                   else (hari_tanggal.split()[0] if hari_tanggal else ""))
+            # Semester dari master (rombel-match prefer Q=room, fallback kode pertama).
+            zoom_no, sks, semester, ket_master = "", "", "", ""
+            try:
+                zoom_no, sks, semester, ket_master = self._master_lookup(
+                    kode, row[CNL_ROOM].strip() if len(row) > CNL_ROOM else "")
+            except Exception as exc:
+                log.warning("makeup master lookup failed: %s", exc)
+            out.append(ClassEntry(
+                code=kode,
+                subject=row[CNL_MATKUL].strip() if len(row) > CNL_MATKUL else "",
+                day=day or "Senin",
+                time_range=row[CNL_JAM_MAKEUP].strip() if len(row) > CNL_JAM_MAKEUP else "",
+                category="Make-up",
+                lecturer=dosen,
+                room=row[CNL_ROOM].strip() if len(row) > CNL_ROOM else "",
+                rombel="",
+                sks=row[CNL_SKS].strip() if len(row) > CNL_SKS else "",
+                zoom_number=row[CNL_ZOOM_NO].strip() if len(row) > CNL_ZOOM_NO else "",
+                zoom_link=row[CNL_ZOOM_LINK].strip() if len(row) > CNL_ZOOM_LINK else "",
+                keterangan=(row[CNL_KET].strip() if len(row) > CNL_KET else "") or ket_master,
+                backup_hari_tanggal=hari_tanggal,
+                semester=semester,
+                row_index=i,
+            ))
+        log.info("Fetched %d makeup classes for %s", len(out), facilitator_name)
+        return out
+
+    async def get_makeup_classes(self, facilitator_name: str) -> list[ClassEntry]:
+        return await self._run(partial(self._fetch_makeup_classes, facilitator_name))
+
+    def _fetch_makeup_notes(self, facilitator_name: str) -> dict[str, tuple[str, str]]:
+        """kode.casefold -> (L jadwal make-up, N fasil make-up) untuk baris dengan
+        I (fasil cancel) match nama DAN L terisi. Dipakai /schedule: kelas milik
+        user yang di-cancel dapat catatan '🧪 make-up {L}, {N}' di baris aslinya."""
+        try:
+            rows = self._cached_rows(self.cfg.sheet_id, self.cfg.cancel_sheet)
+        except SheetsError:
+            return {}
+        target = self._normalize(facilitator_name)
+        out: dict[str, tuple[str, str]] = {}
+        for i, row in enumerate(rows):
+            if i == 0 or len(row) <= CNL_FASIL_MAKEUP:
+                continue
+            owner = row[CNL_FASIL].strip() if len(row) > CNL_FASIL else ""
+            if not owner or target not in self._normalize(owner):
+                continue
+            tgl = row[CNL_JADWAL_MAKEUP].strip() if len(row) > CNL_JADWAL_MAKEUP else ""
+            if not tgl:
+                continue
+            kode = row[CNL_KODE].strip() if len(row) > CNL_KODE else ""
+            if not kode:
+                continue
+            fasil = row[CNL_FASIL_MAKEUP].strip() if len(row) > CNL_FASIL_MAKEUP else ""
+            out[kode.casefold()] = (tgl, fasil)
+        return out
+
+    async def get_makeup_notes(self, facilitator_name: str) -> dict[str, tuple[str, str]]:
+        return await self._run(partial(self._fetch_makeup_notes, facilitator_name))
+
+    async def get_all_loggable_classes(self, facilitator_name: str) -> tuple[list[ClassEntry], list[ClassEntry], list[ClassEntry]]:
+        """Return (personal classes, backup classes, make-up classes)."""
         personal = await self.get_classes(facilitator_name)
         backup = await self.get_backup_classes(facilitator_name)
-        return personal, backup
+        makeup = await self.get_makeup_classes(facilitator_name)
+        return personal, backup, makeup
 
     def _append_backup_record(self, rec: BackupRecord) -> int:
         ws = self._sheet(self.cfg.backup_sheet)
@@ -1511,7 +1626,8 @@ class SheetsClient:
             log.warning("Sheets warmup failed: %s", exc)
 
     def _warmup(self) -> None:
-        for title in (self.cfg.master_sheet, self.cfg.zoom_record_sheet, self.cfg.backup_sheet):
+        for title in (self.cfg.master_sheet, self.cfg.zoom_record_sheet, self.cfg.backup_sheet,
+                      self.cfg.cancel_sheet):
             _rows_cache.pop((self.cfg.sheet_id, title), None)  # force refresh, ignore TTL
             self._cached_rows(self.cfg.sheet_id, title)
 

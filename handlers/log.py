@@ -53,7 +53,7 @@ async def cmd_log(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["facilitator"] = facilitator
     loading = await update.effective_message.reply_text("⏳ Harap tunggu — ambil jadwal...")
     try:
-        personal, backup = await _sheets(context).get_all_loggable_classes(facilitator)
+        personal, backup, makeup = await _sheets(context).get_all_loggable_classes(facilitator)
     except sheets.SheetsError as exc:
         try: await loading.delete()
         except Exception: pass
@@ -61,7 +61,7 @@ async def cmd_log(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
     try: await loading.delete()
     except Exception: pass
-    classes = personal + backup
+    classes = personal + backup + makeup
     if not classes:
         await update.effective_message.reply_text(f"Tidak ada kelas untuk {facilitator} (jadwal + backup kosong).")
         return ConversationHandler.END
@@ -72,8 +72,8 @@ async def cmd_log(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     except Exception: done_by_date = set()
     kb_rows = []
     for i, c in enumerate(classes):
-        last_date = sheets.last_date_for_day(c.day) if c.category != "Backup" else c.backup_hari_tanggal.split(",")[-1].strip() if "," in c.backup_hari_tanggal else c.backup_hari_tanggal
-        if c.category == "Backup" and c.backup_hari_tanggal:
+        last_date = sheets.last_date_for_day(c.day) if c.category not in ("Backup", "Make-up") else c.backup_hari_tanggal.split(",")[-1].strip() if "," in c.backup_hari_tanggal else c.backup_hari_tanggal
+        if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
             try:
                 last_date = _parse_backup_date(c.backup_hari_tanggal)
             except Exception: pass
@@ -81,6 +81,8 @@ async def cmd_log(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         prefix = "✅ " if is_done else ""
         if c.category == "Backup":
             label = f"{prefix}🔄 {c.code} — {c.subject} ({c.backup_hari_tanggal})"
+        elif c.category == "Make-up":
+            label = f"{prefix}🧪 {c.code} — {c.subject} ({c.backup_hari_tanggal})"
         else:
             label = f"{prefix}{c.code} — {c.subject} ({c.day} {c.time_range})"
         kb_rows.append([InlineKeyboardButton(label, callback_data=f"c:{i}")])
@@ -294,8 +296,9 @@ def _build_record(context: ContextTypes.DEFAULT_TYPE) -> sheets.LogRecord:
     c: sheets.ClassEntry = context.user_data["cls"]
     # Zoom: user input (step 4) OR auto from Jadwal Fasil
     zoom = context.user_data.get("zoom", "") or c.zoom_label
-    # Lecture date: backup uses its Hari/Tanggal, personal uses next occurrence of day
-    if c.category == "Backup" and c.backup_hari_tanggal:
+    # Lecture date: backup/make-up pakai Hari/Tanggal eksplisit, personal pakai
+    # jadwal berikutnya hari kelas.
+    if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
         lecture_date = _parse_backup_date(c.backup_hari_tanggal)
     else:
         lecture_date = sheets.next_date_for_day(c.day)

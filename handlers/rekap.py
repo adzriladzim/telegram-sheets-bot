@@ -231,11 +231,11 @@ async def _build_class_kb(context) -> list[list[InlineKeyboardButton]]:
     context.user_data.pop("zoom_tanggal", None)
     facilitator = context.user_data.get("facilitator", "")
     try:
-        personal, backup = await _sheets(context).get_all_loggable_classes(facilitator)
+        personal, backup, makeup = await _sheets(context).get_all_loggable_classes(facilitator)
         tab = await _sheets(context).find_rekap_tab(facilitator)
     except sheets.SheetsError as exc:
         raise
-    classes = personal + backup
+    classes = personal + backup + makeup
     context.user_data["classes"] = classes
     context.user_data["rekap_tab"] = tab
     try:
@@ -244,7 +244,7 @@ async def _build_class_kb(context) -> list[list[InlineKeyboardButton]]:
         complete, incomplete = set(), set()
     kb_rows = []
     for i, c in enumerate(classes):
-        if c.category == "Backup" and c.backup_hari_tanggal:
+        if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
             try:
                 from handlers.log import _parse_backup_date
                 last_cmp = _parse_backup_date(c.backup_hari_tanggal)
@@ -264,6 +264,8 @@ async def _build_class_kb(context) -> list[list[InlineKeyboardButton]]:
             prefix = ""
         if c.category == "Backup":
             label = f"{prefix}🔄 {c.code} — {c.subject} ({c.backup_hari_tanggal})"
+        elif c.category == "Make-up":
+            label = f"{prefix}🧪 {c.code} — {c.subject} ({c.backup_hari_tanggal})"
         else:
             label = f"{prefix}{c.code} — {c.subject} ({c.day} {c.time_range})"
         kb_rows.append([InlineKeyboardButton(label, callback_data=f"rkc:{i}")])
@@ -285,7 +287,7 @@ def _tanggal_keys(context, c) -> list:
     zt = context.user_data.get("zoom_tanggal")
     if zt:
         return [zt, sheets.tanggal_panjang(zt)]
-    if c.category == "Backup" and c.backup_hari_tanggal:
+    if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
         try:
             from handlers.log import _parse_backup_date
             cmpd = _parse_backup_date(c.backup_hari_tanggal)
@@ -668,7 +670,7 @@ def _tanggal_kelas(context, c) -> str:
     zt = context.user_data.get("zoom_tanggal")
     if zt:
         return sheets.tanggal_panjang(zt)
-    if c.category == "Backup" and c.backup_hari_tanggal:
+    if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
         return c.backup_hari_tanggal.strip()
     return sheets.tanggal_panjang(sheets.next_date_for_day(c.day))
 

@@ -405,6 +405,8 @@ Menampilkan **seluruh jadwal kamu pekan ini** (pribadi + backup) dari sheet Jadw
 >   3Ilkom — Struktur Data
 >   🏫 R.105 | 👤 Budi Santoso | Zoom 33
 
+> **Kelas Make-up (🧪):** kalau kelasmu di-*cancel* lalu dijadwalkan ulang oleh tim akademik, bot menampilkan jadwal make-up otomatis — label **🧪** di picker `/zoom`, `/rekap`, dan `/absen`, muncul di `/schedule` sesuai tanggal make-up (dengan penanda **← HARI INI**), plus catatan `🧪 make-up {tanggal}, {fasil}` di baris jadwal aslinya yang di-cancel. Data make-up **hanya dibaca** dari kolom J–R tab *Kelas Cancel & Pengganti* (tanggal, jam, fasil pengganti, Zoom, room) — bot **tidak pernah menulis** ke kolom tersebut; semua isian make-up dikelola tim akademik.
+
 ### 3.9 `/cancel` & `/skip` — batal dan lewati
 
 - **`/cancel`** — batalkan seluruh form yang sedang berjalan. Semua form juga punya tombol **❌ Batal**.

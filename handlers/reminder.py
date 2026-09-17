@@ -74,7 +74,7 @@ async def _filter_todo(
     now = sheets.today_str_wib()
     todo = []
     for c in mine:
-        if c.category == "Backup" and c.backup_hari_tanggal:
+        if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
             tgl = _parse_backup_date(c.backup_hari_tanggal)
         else:
             tgl = sheets.last_date_for_day(c.day)
@@ -93,10 +93,11 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     cfg: Config = context.bot_data["cfg"]
     full_slot = _is_full_slot(cfg, context.job.name)
     try:
-        classes = await context.bot_data["sheets"].get_classes(facilitator)
+        personal, backup, makeup = await context.bot_data["sheets"].get_all_loggable_classes(facilitator)
     except sheets.SheetsError as exc:
         log.warning("Reminder skipped for %s (%s): %s", chat_id, facilitator, exc)
         return
+    classes = personal + backup + makeup
     today = sheets.today_day_wib()
     mine = [c for c in classes if _norm_day(c.day) == _norm_day(today)]
     if not mine:
