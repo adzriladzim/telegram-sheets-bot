@@ -715,6 +715,43 @@ class SheetsClient:
     async def get_done_by_date(self, facilitator_name: str) -> set[tuple[str, str]]:
         return await self._run(partial(self._get_done_by_date, facilitator_name))
 
+    def _zoom_entries(self, name: str) -> list[dict]:
+        """Zoom Record rows milik fasil (col C match). Read-only wrapper untuk
+        picker /rekap — 1 baris Zoom = 1 baris rekap potensial."""
+        rows = self._cached_rows(self.cfg.sheet_id, self.cfg.zoom_record_sheet)
+        target = self._normalize(name)
+        out: list[dict] = []
+        for i, r in enumerate(rows):
+            if i == 0:
+                continue  # header
+            if len(r) <= 14:
+                continue
+            if self._normalize(r[2]) != target:
+                continue
+            if not any((c or "").strip() for c in r[1:15]):
+                continue  # skip baris kosong
+            kode = r[5].strip()
+            if not kode:
+                continue
+            out.append({
+                "kode": kode,                    # F
+                "subject": r[6].strip(),         # G
+                "tanggal": self._norm_date(r[3].strip()),  # D -> dd/mm/yyyy
+                "pertemuan": r[7].strip(),       # H
+                "scheme": r[8].strip(),          # I
+                "sks": r[9].strip(),             # J
+                "tipe": r[10].strip(),           # K
+                "dosen": r[11].strip(),          # L
+                "mulai": r[12].strip(),          # M
+                "zoom": r[13].strip(),           # N
+                "catatan": r[14].strip(),        # O
+                "row": i + 1,
+            })
+        return out
+
+    async def zoom_entries(self, name: str) -> list[dict]:
+        return await self._run(partial(self._zoom_entries, name))
+
     def _all_absen_rows(self) -> dict[str, list[list[str]]]:
         """All absen worksheet rows {title: rows} in ONE values.batchGet, cached per title."""
         titles = self._tabs(self.cfg.absen_sheet_id)

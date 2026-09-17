@@ -1,7 +1,7 @@
 # MEMORY — telegram-sheets-bot (TelefasilBot)
 
 > Per-project memory. Read at cold session start. Append-only.
-> Updated: 2026-09-17 (HEAD a37a294 — html.escape sweep 42 titik 7 handler; Railway deploy MANUAL)
+> Updated: 2026-09-17 (HEAD 80bfe2f — /rekap zoom-record picker REDESIGN)
 
 ## What
 Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, rekap kehadiran, backup, cancel kelas langsung ke Google Sheets. Multi-user (satu bot, tiap fasil lihat jadwal sendiri). Bot: [@telefasil_bot](https://t.me/telefasil_bot).
@@ -257,11 +257,62 @@ Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, 
 - **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar → STOP, delegate vision agent. Cavemem MCP down — append manual.
 
 ## [2026-09-17] Stats default RINGAN + copy start/help SHIPPED 2114d59 (b85db18..2114d59)
-> **SHIPPED:** commit `2114d59` pushed `b85db18..2114d59`. HEAD = 2114d59. **Railway deploy MANUAL (auto-deploy off) � klik Deploy Latest Commit ? ACTIVE = 2114d59, lalu tes /stats + /help.**
+> **SHIPPED:** commit `2114d59` pushed `b85db18..2114d59`. HEAD = 2114d59. **Railway deploy MANUAL (auto-deploy off) � klik Deploy Latest Commit ? ACTIVE = 2114d59, lalu tes /stats + /help.**
 
-- **Default /stats = RINGAN (1-2 bubble):** ringkasan eksekutif (aktif X/Y, aksi, sudah-log %, ? lewat, ?? top-3 tunggakan + tertua, "+N fasil lain � lihat /stats detail") + Per menu 1 baris + Jarang pakai (nama saja) + Belum pernah (nama saja, hitung). Balik keluhan "KEPADETAN".
+- **Default /stats = RINGAN (1-2 bubble):** ringkasan eksekutif (aktif X/Y, aksi, sudah-log %, ? lewat, ?? top-3 tunggakan + tertua, "+N fasil lain � lihat /stats detail") + Per menu 1 baris + Jarang pakai (nama saja) + Belum pernah (nama saja, hitung). Balik keluhan "KEPADETAN".
 - **/stats detail** = laporan lengkap 8 blok (roster penuh, per menu, jarang, belum pernah, kelengkapan/tunggakan per fasil, cakupan macet, aktivitas). **/stats ringkas** = tetap alias minimal (blok eksekutif saja).
-- _parse_args: none -> ("ringan",7); detail -> lengkap; ringkas -> ringkas. Stray `<` di "Jarang pakai <{thr}" dihindari (raw "<" = BadRequest, pakai "kurang dari {thr} aksi") � kelas bug e604184.
-- **Copy /start + /help:** ganti judul "Zoom Record Bot / bot pencatat keseharian" ? **TelefasilBot � asisten harian fasil Cakrawala**: catat ngajar, absen, rekap, backup, sampai jadwal, semua dari chat ini. /help sebut SEMUA fitur + notif otomatis + ajak aksi (/zoom). Tombol inline tetap.
-- **Verify:** verify_stats_redesign.py **32/32 PASS** (parse baru, light =1-2 bubble + no detail blok, detail 8 blok, chunk =3500 parseable) + verify_start_copy.py (baru) **8/8 PASS** + verify_stats_chunks PASS + verify_html_escape PASS + compileall OK. Stale: verify_stats_html.py rusak pre-existing (panggil _build_report yg tak ada) � tidak disentuh.
+- _parse_args: none -> ("ringan",7); detail -> lengkap; ringkas -> ringkas. Stray `<` di "Jarang pakai <{thr}" dihindari (raw "<" = BadRequest, pakai "kurang dari {thr} aksi") � kelas bug e604184.
+- **Copy /start + /help:** ganti judul "Zoom Record Bot / bot pencatat keseharian" ? **TelefasilBot � asisten harian fasil Cakrawala**: catat ngajar, absen, rekap, backup, sampai jadwal, semua dari chat ini. /help sebut SEMUA fitur + notif otomatis + ajak aksi (/zoom). Tombol inline tetap.
+- **Verify:** verify_stats_redesign.py **32/32 PASS** (parse baru, light =1-2 bubble + no detail blok, detail 8 blok, chunk =3500 parseable) + verify_start_copy.py (baru) **8/8 PASS** + verify_stats_chunks PASS + verify_html_escape PASS + compileall OK. Stale: verify_stats_html.py rusak pre-existing (panggil _build_report yg tak ada) � tidak disentuh.
+- **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar ? STOP, delegate vision agent. Cavemem MCP down � append manual.
+
+## [2026-09-17] Parser display-name Zoom CU "NNN_Nama_Prodi" — f48e024 (c5eb2bb..f48e024)
+> **SHIPPED:** commit `f48e024` pushed `c5eb2bb..f48e024`. HEAD = f48e024. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE = f48e024.**
+
+- **Isi — parser display-name Zoom CU format `NNN_Nama_Prodi`:**
+  - `_resolve_absen`: regex **nama-core** — pisahkan NIM/tiebreaker dari nama (display-name Zoom acap `NNN_Nama_Prodi`, nama = Nama_Prodi).
+  - **Tiebreaker 3-digit-NIM** — nama sama dobel → pilih yang ekor NIM 3-digit match.
+  - **Ambiguous TETAP warned** — kandidat tak ter-resolve → warning, bukan diam-diam pilih.
+  - **Jalur lama utuh** — NIM exact-penuh + Nama contains (perilaku lama) tidak diubah; parser baru aditif.
+  - **Prompt + HELP contoh baru** — copy bimbingan user cara paste daftar format Zoom CU.
+- **VERIFIKASI:** stub **8/8 PASS** (offline, tanpa creds). compileall OK.
+- **Housekeeping:** `verify_725423d.py` STALE — panggil `reminder_slots` yang sudah tak ada di code current. Arsipkan bila sempat (non-urgent, bukan gate verify).
+- **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE jadi **f48e024**; (2) tes paste daftar Zoom format `NNN_Nama_Prodi` di `/absen` live.
+- **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar → STOP, delegate vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-17] Stats mode buttons + mapping backup/cancel verified — a1b91ff (0307a6c..a1b91ff)
+> **SHIPPED:** commit `a1b91ff` pushed `0307a6c..a1b91ff`. HEAD = a1b91ff. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE = a1b91ff, lalu tes `/stats` tombol + `/backup` + `/cancel` baru.**
+
+- **Stats mode buttons (`/stats`):** tombol inline **Detail / Ringkas / Refresh** + callback handler — user ganti mode langsung dari bubble, tanpa ketik ulang arg. Admin guard di callback. Stub **19/19 PASS** (offline, tanpa creds).
+- **Backup mapping VERIFIED BENAR** (vs header live): kolom **B–J**. Kolom **A dibiarkan** utk "No." manual — tak diisi bot.
+- **Cancel mapping SUDAH dibenerin** di commit `0307a6c` (sebelumnya salah posisi vs header).
+- **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE jadi **a1b91ff**; (2) tes `/stats` tombol Detail/Ringkas/Refresh live; (3) tes `/backup` + `/cancel` isi kolom sesuai mapping B–J.
+- **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar → STOP, delegate vision agent. Cavemem MCP down — append manual.
+> **SHIPPED:** commit `2e0d542` pushed `f48e024..2e0d542`. HEAD = 2e0d542. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE = 2e0d542, lalu tes `/absen` + `/cancel` live.**
+
+- **SYMPTOM:** `/absen` + `/cancel` SILENT HANG (bot tak balas, wedged lock) — user lapor live.
+- **FIX — caps timeout di semua lapisan (bot.py/sheets.py):**
+  - `_run` lock **acquire cap 90s** — kalau lock tak ke-dapat dalam 90s → pesan jujur "⏳ Bot lagi sibuk..." (bukan hang diam).
+  - **Drain cap 30s** — drain task tidak boleh menahan lock tanpa batas (follow-up RACE-1 e686cec, drain unbounded → kini capped).
+  - **gspread `set_timeout(10, 30)`** — connect 10s, read 30s.
+  - **Drive httplib2 timeout 30** — API call Drive tak hang selamanya.
+  - **socket default timeout 30** (socket.setdefaulttimeout) — jaring pengaman terakhir utk semua koneksi.
+- **EFEK:** silent hang → kini **⚠️ honest message** (bot balas alih-alih diam). User tahu sedang sibuk + bisa retry.
+- **VERIFIKASI:** stub **9/9 PASS** (offline, tanpa creds). compileall OK.
+- **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE jadi **2e0d542**; (2) tes `/absen` + `/cancel` live (pastikan tak ada silent hang lagi).
+- **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar → STOP, delegate vision agent. Cavemem MCP down — append manual.
+
+
+## [2026-09-17] /rekap REDESIGN � picker dari Zoom Record (bukan kelas minggu ini) � 80bfe2f..HEAD
+> **SHIPPED:** pushed. HEAD = 80bfe2f. **Railway deploy MANUAL (auto-deploy off) � klik Deploy Latest Commit.**
+
+- **PICKER BARU /rekap � basis = Zoom Record fasil (col C match), bukan kelas minggu ini:**
+  - sheets.zoom_entries(name) async read-only (via _run) � list {kode, subject, tanggal?dd/mm/yyyy, pertemuan, scheme, sks, tipe, dosen, mulai, zoom, catatan, row}. Skip header + baris kosong.
+  - Klasifikasi per entri Zoom: **lengkap ? skip; rumpang ? ?? (fix row+gaps dari rekap_row_status); belum ada baris ? ?**. Urut tanggal lama?baru. Paginasi 25/halaman (� Prev / Next �).
+  - Tombol label "{??/?} {dd/mm} {kode} p.{pertemuan}". Header "1?? Rekap yang perlu diisi (dari Zoom Record):". Bawah: "? Buat entri lain (di luar daftar)" + "? Batal" ? jalur manual = flow lama (class picker ? steps normal).
+  - ?? = mode lengkapi EKSIS (prefill dari baris sheet via _start_fix, update sel). ? = PREFILL dari Zoom: tanggal/dosen/jam/kode/matkul/sks/pertemuan(termasuk "3 dan 4")/tipe (Online?Online, Offline?On-site), skip step pertemuan+tipe, sisa: sesi?peran?bukti?confirm?append (separator logic tetap).
+  - Daftar kosong ? "? Semua rekap dari Zoom Record sudah lengkap." + tombol buat entri manual.
+  - Callback baru: zk:{idx} pick, zkp:prev|next halaman, zk:manual/zk:cancel. State ZOOM = 8. zoom_tanggal di user_data override tanggal kelas (manual vs zoom flow).
+- **VERIFIKASI:** verify_zoom_picker.py **16/16 PASS** (offline, tanpa creds: parsing, klasifikasi 3 status, urutan, paginasi, prefill zoom?record, jalur manual). compileall OK.
+- **NEXT (user):** (1) Railway ? **Deploy Latest Commit** ? tes /rekap live: pilih ??/?, pastikan pertemuan "3 dan 4" + tipe On-site masuk, baris baru di bawah separator hitam.
 - **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar ? STOP, delegate vision agent. Cavemem MCP down � append manual.

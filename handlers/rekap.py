@@ -25,8 +25,9 @@ from config import Config
 
 log = logging.getLogger(__name__)
 
-CLASS, MEETING, TIPE, SESI, PERAN, BUKTI, CONFIRM = range(7)
+CLASS, MEETING, TIPE, SESI, PERAN, BUKTI, CONFIRM, ZOOM = range(8)
 _TIMEOUT = 60 * 60
+_ZOOM_PAGE = 25
 
 _SKIP_FILTER = filters.TEXT & ~filters.COMMAND
 
@@ -38,6 +39,19 @@ def _sheets(context: ContextTypes.DEFAULT_TYPE) -> sheets.SheetsClient:
 def _first_num(s: str) -> int:
     m = re.search(r"\d+", s or "")
     return int(m.group(0)) if m else 1
+
+
+def _date_key(t: str) -> tuple:
+    """'dd/mm/yyyy' -> (y,m,d) for tanggal lama->baru sort; invalid -> last."""
+    m = re.match(r"(\d{2})/(\d{2})/(\d{4})", t or "")
+    if not m:
+        return (9999, 99, 99)
+    return (int(m.group(3)), int(m.group(2)), int(m.group(1)))
+
+
+def _zoom_tipe(scheme: str) -> str:
+    """Scheme Zoom Record -> tipe rekap: Online->Online, Offline->On-site."""
+    return "Online" if (scheme or "").strip().lower() == "online" else "On-site"
 
 
 # ---------- step 1: pick class ----------
@@ -52,10 +66,10 @@ async def cmd_rekap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.effective_message.reply_text(users.UNREGISTERED_MSG)
         return ConversationHandler.END
     context.user_data["facilitator"] = facilitator
-    loading = await update.effective_message.reply_text("⏳ Ambil jadwal + tab rekap...")
+    loading = await update.effective_message.reply_text("⏳ Ambil Zoom Record + tab rekap...")
     try:
-        personal, backup = await _sheets(context).get_all_loggable_classes(facilitator)
         tab = await _sheets(context).find_rekap_tab(facilitator)
+        entries = await _sheets(context).zoom_entries(facilitator)
     except sheets.SheetsError as exc:
         try: await loading.delete()
         except Exception: pass
@@ -63,10 +77,165 @@ async def cmd_rekap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
     try: await loading.delete()
     except Exception: pass
-    classes = personal + backup
-    if not classes:
-        await update.effective_message.reply_text(f"Tidak ada kelas untuk {facilitator}.")
+    context.user_data["rekap_tab"] = tab
+    items = await _classify_zoom_entries(context, tab, entries)
+    if not items:
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ Buat entri lain (di luar daftar)", callback_data="rzk:manual")],
+            [InlineKeyboardButton("❌ Batal", callback_data="rzk:cancel")],
+        ])
+        await update.effective_message.reply_text("✅ Semua rekap dari Zoom Record sudah lengkap.", reply_markup=kb)
+        return ZOOM
+    context.user_data["zoom_items"] = items
+    context.user_data["zoom_page"] = 0
+    await _render_zoom_picker(update.effective_message, context)
+    return ZOOM
+
+
+async def _classify_zoom_entries(context, tab: str, entries: list[dict]) -> list[dict]:
+    """Klasifikasi tiap entri Zoom: lengkap -> skip; rumpang -> fix; belum ada -> new.
+    Reuse _get_rekap_done / rekap_row_status via async API."""
+    s = _sheets(context)
+    try:
+        done = await s.get_rekap_done(context.user_data["facilitator"])
+    except Exception:
+        done = set()
+    done_norm = {(k, s._norm_date(t)) for k, t in done}
+    items = []
+    for e in entries:
+        key = (e["kode"].casefold(), e["tanggal"])
+        if key in done_norm:
+            try:
+                st = await s.rekap_row_status(tab, e["kode"], [e["tanggal"], sheets.tanggal_panjang(e["tanggal"])])
+            except Exception:
+                st = {"state": "none"}
+            if st.get("state") == "complete":
+                continue  # lengkap -> skip
+            if st.get("state") == "incomplete":
+                items.append({"kind": "fix", "entry": e, "row": st["row"], "gaps": st["gaps"]})
+                continue
+        items.append({"kind": "new", "entry": e})
+    items.sort(key=lambda it: _date_key(it["entry"]["tanggal"]))
+    return items
+
+
+def _zoom_kb(items: list[dict], page: int) -> list[list[InlineKeyboardButton]]:
+    kb = []
+    start = page * _ZOOM_PAGE
+    for i in range(start, min(start + _ZOOM_PAGE, len(items))):
+        e = items[i]["entry"]
+        icon = "🧩" if items[i]["kind"] == "fix" else "➕"
+        ddmm = e["tanggal"][:5] if e["tanggal"] else "??/??"
+        label = f"{icon} {ddmm} {e['kode']} p.{e['pertemuan']}"
+        kb.append([InlineKeyboardButton(label, callback_data=f"rzk:{i}")])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("‹ Prev", callback_data="rzkp:prev"))
+    if start + _ZOOM_PAGE < len(items):
+        nav.append(InlineKeyboardButton("Next ›", callback_data="rzkp:next"))
+    if nav:
+        kb.append(nav)
+    kb.append([
+        InlineKeyboardButton("➕ Buat entri lain (di luar daftar)", callback_data="rzk:manual"),
+        InlineKeyboardButton("❌ Batal", callback_data="rzk:cancel"),
+    ])
+    return kb
+
+
+async def _render_zoom_picker(msg, context) -> None:
+    items = context.user_data.get("zoom_items") or []
+    page = context.user_data.get("zoom_page", 0)
+    total = max(len(items), 1)
+    pages = (total + _ZOOM_PAGE - 1) // _ZOOM_PAGE
+    await msg.reply_text(
+        f"1️⃣ Rekap yang perlu diisi (dari Zoom Record):\n"
+        f"({len(items)} entri, hal {page + 1}/{pages})",
+        reply_markup=InlineKeyboardMarkup(_zoom_kb(items, page)))
+
+
+async def pick_zoom(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query
+    await q.answer()
+    idx = int(q.data.split(":")[1])
+    items = context.user_data.get("zoom_items") or []
+    if not 0 <= idx < len(items):
+        await q.message.reply_text("Pilihan kedaluwarsa — kirim /rekap lagi.")
         return ConversationHandler.END
+    item = items[idx]
+    e = item["entry"]
+    context.user_data["zoom_entry"] = e
+    c = _class_from_zoom(e)
+    context.user_data["cls"] = c
+    context.user_data["zoom_tanggal"] = e["tanggal"]
+    await q.message.edit_text(
+        f"Kelas: <b>{html.escape(c.code)}</b> — {html.escape(c.subject)} ({html.escape(e['tanggal'][:5])})",
+        parse_mode=ParseMode.HTML)
+    if item["kind"] == "fix":
+        # Lengkapi EKSIS: prefill dari baris sheet, isi yang kosong, submit update sel
+        context.user_data["fix_row"] = item["row"]
+        context.user_data["fix_gaps"] = item["gaps"]
+        return await _start_fix(q.message, context)
+    # ➕ baru: prefill dari Zoom, lewati pertemuan/tipe (bisa ◀️ Kembali)
+    context.user_data["meeting"] = e["pertemuan"]
+    context.user_data["tipe"] = _zoom_tipe(e["scheme"])
+    pre = (
+        f"➕ Prefill dari Zoom Record:\n"
+        f"• Pertemuan: <b>{html.escape(e['pertemuan'])}</b>\n"
+        f"• Tipe: <b>{html.escape(context.user_data['tipe'])}</b>\n"
+        f"• Tanggal: <b>{html.escape(_tanggal_kelas(context, c))}</b>\n\n"
+        f"4️⃣ Sesi kelas? (atau ketik manual)"
+    )
+    await q.message.reply_text(pre, parse_mode=ParseMode.HTML, reply_markup=_sesi_kb())
+    return SESI
+
+
+async def zoom_page(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query
+    await q.answer()
+    items = context.user_data.get("zoom_items") or []
+    page = context.user_data.get("zoom_page", 0)
+    pages = max((len(items) + _ZOOM_PAGE - 1) // _ZOOM_PAGE, 1)
+    page = max(0, min(pages - 1, page + (1 if q.data.endswith(":next") else -1)))
+    context.user_data["zoom_page"] = page
+    try:
+        await q.message.edit_text(
+            f"1️⃣ Rekap yang perlu diisi (dari Zoom Record):\n"
+            f"({len(items)} entri, hal {page + 1}/{pages})",
+            reply_markup=InlineKeyboardMarkup(_zoom_kb(items, page)))
+    except Exception:
+        await _render_zoom_picker(q.message, context)
+    return ZOOM
+
+
+async def zoom_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Back to old flow: keep class picker keyboard (manually pick/decode class)."""
+    q = update.callback_query
+    await q.answer()
+    kb_rows = context.user_data.get("class_kb")
+    if not kb_rows:
+        try:
+            kb_rows = await _build_class_kb(context)
+            context.user_data["class_kb"] = kb_rows
+        except sheets.SheetsError as exc:
+            await q.message.reply_text(f"⚠️ {exc}")
+            return ConversationHandler.END
+    if not kb_rows:
+        await q.message.reply_text(f"Tidak ada kelas untuk {context.user_data.get('facilitator', '')}.")
+        return ConversationHandler.END
+    await q.message.reply_text("1️⃣ Pilih kelas: (✅ = lengkap, ⚠️ = rumpang/lengkapi)", reply_markup=InlineKeyboardMarkup(kb_rows))
+    return CLASS
+
+
+async def _build_class_kb(context) -> list[list[InlineKeyboardButton]]:
+    """Old class-picker keyboard (manual path). Per-chat user_data unchanged."""
+    context.user_data.pop("zoom_tanggal", None)
+    facilitator = context.user_data.get("facilitator", "")
+    try:
+        personal, backup = await _sheets(context).get_all_loggable_classes(facilitator)
+        tab = await _sheets(context).find_rekap_tab(facilitator)
+    except sheets.SheetsError as exc:
+        raise
+    classes = personal + backup
     context.user_data["classes"] = classes
     context.user_data["rekap_tab"] = tab
     try:
@@ -99,14 +268,23 @@ async def cmd_rekap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             label = f"{prefix}{c.code} — {c.subject} ({c.day} {c.time_range})"
         kb_rows.append([InlineKeyboardButton(label, callback_data=f"rkc:{i}")])
     kb_rows.append([InlineKeyboardButton("❌ Batal", callback_data="rkb:cancel")])
-    context.user_data["class_kb"] = kb_rows
-    await update.effective_message.reply_text(
-        "1️⃣ Pilih kelas: (✅ = lengkap, ⚠️ = rumpang/lengkapi)", reply_markup=InlineKeyboardMarkup(kb_rows))
-    return CLASS
+    return kb_rows
+
+
+def _class_from_zoom(e: dict) -> sheets.ClassEntry:
+    """ClassEntry sintetis dari baris Zoom Record buat prefill langkah rekap."""
+    return sheets.ClassEntry(
+        code=e["kode"], subject=e["subject"], day="", time_range=e["mulai"],
+        category="", lecturer=e["dosen"], room="", rombel="", sks=e["sks"],
+        zoom_number=e["zoom"], zoom_link="", keterangan="", semester="",
+    )
 
 
 def _tanggal_keys(context, c) -> list:
     """Accepted tanggal strings (dd/mm/yyyy + panjang) for this class's last schedule."""
+    zt = context.user_data.get("zoom_tanggal")
+    if zt:
+        return [zt, sheets.tanggal_panjang(zt)]
     if c.category == "Backup" and c.backup_hari_tanggal:
         try:
             from handlers.log import _parse_backup_date
@@ -193,14 +371,18 @@ async def fix_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         context.user_data.pop("fix_row", None)
         context.user_data.pop("fix_gaps", None)
         return await _begin_meeting(q.message, context)
-    # Lengkapi: prefill dari baris sheet, arahkan ke field yang kurang
+    return await _start_fix(q.message, context)
+
+
+async def _start_fix(message: Message, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Lengkapi EKSIS: prefill dari baris sheet, isi yang kosong, submit update sel."""
     c = context.user_data["cls"]
     tab = context.user_data.get("rekap_tab", "")
     row_idx = context.user_data.get("fix_row")
     try:
         vals = await _sheets(context).rekap_row_values(tab, row_idx)
     except Exception:
-        return await _begin_meeting(q.message, context)
+        return await _begin_meeting(message, context)
     def cell(i):
         return vals[i].strip() if len(vals) > i else ""
     # Prefill: H=7 pertemuan, I=8 tipe, J=9 sesi, K=10 peran
@@ -209,17 +391,17 @@ async def fix_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if cell(9): context.user_data["sesi"] = cell(9)
     if cell(10): context.user_data["peran"] = cell(10)
     gaps = context.user_data.get("fix_gaps", [])
-    await q.message.reply_text(f"🧩 Melengkapi baris {row_idx} ({c.code}).")
+    await message.reply_text(f"🧩 Melengkapi baris {row_idx} ({c.code}).")
     if not context.user_data.get("meeting"):
-        return await _begin_meeting(q.message, context)
+        return await _begin_meeting(message, context)
     if not context.user_data.get("tipe"):
-        return await _ask_tipe(q.message, context)
+        return await _ask_tipe(message, context)
     if not context.user_data.get("sesi"):
-        await q.message.reply_text("4️⃣ Sesi kelas? (atau ketik manual)", reply_markup=_sesi_kb())
+        await message.reply_text("4️⃣ Sesi kelas? (atau ketik manual)", reply_markup=_sesi_kb())
         return SESI
     if not context.user_data.get("bukti") and "Bukti" in gaps:
-        return await _ask_bukti(q.message, context)
-    return await _confirm_fix(q.message, context)
+        return await _ask_bukti(message, context)
+    return await _confirm_fix(message, context)
 
 
 async def _confirm_fix(message: Message, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -481,6 +663,9 @@ async def skip_bukti(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 def _tanggal_kelas(context, c) -> str:
     """Tanggal Kehadiran format panjang '7 September 2026'."""
+    zt = context.user_data.get("zoom_tanggal")
+    if zt:
+        return sheets.tanggal_panjang(zt)
     if c.category == "Backup" and c.backup_hari_tanggal:
         return c.backup_hari_tanggal.strip()
     return sheets.tanggal_panjang(sheets.next_date_for_day(c.day))
@@ -635,6 +820,13 @@ async def back_to_rk_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await q.answer()
     kb_rows = context.user_data.get("class_kb")
     if not kb_rows:
+        try:
+            kb_rows = await _build_class_kb(context)
+            context.user_data["class_kb"] = kb_rows
+        except sheets.SheetsError as exc:
+            await q.message.reply_text(f"⚠️ {exc}")
+            return ConversationHandler.END
+    if not kb_rows:
         await q.message.reply_text("Kembali ke awal — kirim /rekap lagi.")
         return ConversationHandler.END
     await q.message.reply_text("1️⃣ Pilih kelas:", reply_markup=InlineKeyboardMarkup(kb_rows))
@@ -653,6 +845,10 @@ def register(app: Application, cfg: Config) -> None:
         entry_points=[CommandHandler("rekap", cmd_rekap),
                       CallbackQueryHandler(cmd_rekap, pattern=r"^go:rekap$")],
         states={
+            ZOOM: [CallbackQueryHandler(pick_zoom, pattern=r"^rzk:\d+$"),
+                   CallbackQueryHandler(zoom_page, pattern=r"^rzkp:(prev|next)$"),
+                   CallbackQueryHandler(zoom_manual, pattern=r"^rzk:manual$"),
+                   CallbackQueryHandler(back_rk_cancel, pattern=r"^rzk:cancel$")],
             CLASS: [CallbackQueryHandler(pick_class, pattern=r"^rkc:\d+$"), CallbackQueryHandler(back_rk_cancel, pattern=r"^rkb:cancel$"), CallbackQueryHandler(fix_choice, pattern=r"^rkfix:(yes|new)$"), CallbackQueryHandler(_begin_meeting_cb, pattern=r"^rknew:go$")],
             MEETING: [CallbackQueryHandler(pick_meeting, pattern=r"^rkm:"), CallbackQueryHandler(back_to_rk_class, pattern=r"^rkb:class$"), MessageHandler(_SKIP_FILTER, enter_meeting)],
             TIPE: [CallbackQueryHandler(pick_tipe, pattern=r"^rkt:[os]$"), CallbackQueryHandler(back_to_rk_meeting, pattern=r"^rkb:meeting$")],
