@@ -16,9 +16,14 @@ import re
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+)
 
 import sheets
 import usage
@@ -432,17 +437,31 @@ def _parse_args(args: list[str] | None) -> tuple[str, int]:
     return mode, _period_days(period_arg)
 
 
-async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_chat.id != ADMIN_ID:
-        await update.message.reply_text("⛔ Hanya admin bisa lihat stats.")
-        return
-    from telegram.constants import ChatAction
-    try:
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-    except Exception:
-        pass
-    busy = await update.message.reply_text("⏳ Hitung statistik...")
-    mode, days = _parse_args(context.args)
+def _mode_from_cb(cb: str | None) -> str | None:
+    """Callback data -> mode ("ringan"|"ringkas"|"lengkap"), None if unknown."""
+    if cb == "st:detail":
+        return "lengkap"
+    if cb == "st:ringkas":
+        return "ringkas"
+    if isinstance(cb, str) and cb.startswith("st:refresh"):
+        parts = cb.split(":")
+        mode = parts[2] if len(parts) > 2 else None
+        return mode if mode in ("ringan", "ringkas", "lengkap") else None
+    return None
+
+
+def _keyboard(mode: str) -> InlineKeyboardMarkup:
+    """Tombol aksi /stats: ganti mode / refresh (ulang mode yang sama)."""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("📊 Detail", callback_data="st:detail"),
+        InlineKeyboardButton("📊 Ringkas", callback_data="st:ringkas"),
+        InlineKeyboardButton("🔄 Refresh", callback_data=f"st:refresh:{mode}"),
+    ]])
+
+
+async def _generate_report(mode: str, days: int,
+                           context: ContextTypes.DEFAULT_TYPE) -> list[str]:
+    """Hitung laporan penuh (padding command & callback, hasil sama)."""
     all_users = users.registry().all()
     names = sorted(all_users.values())
 
@@ -477,25 +496,72 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         cov = None
 
     if mode == "ringkas":
-        L = _build_summary(names, data, pdata, days, per_menu, per_user, last_ts,
-                           matriks, arrears, cov)
-    elif mode == "ringan":
-        L = _build_light(names, data, pdata, days, per_menu, per_user, last_ts,
+        return _build_summary(names, data, pdata, days, per_menu, per_user, last_ts,
+                              matriks, arrears, cov)
+    if mode == "ringan":
+        return _build_light(names, data, pdata, days, per_menu, per_user, last_ts,
+                            matriks, arrears, cov)
+    return _build_detail(names, data, pdata, days, per_menu, per_user, last_ts,
                          matriks, arrears, cov)
-    else:
-        L = _build_detail(names, data, pdata, days, per_menu, per_user, last_ts,
-                          matriks, arrears, cov)
+
+
+async def _send_report(reply_text, lines: list[str], mode: str) -> None:
+    """Kirim chunk laporan; tombol aksi di bubble TERAKHIR."""
+    chunks = _chunks(lines)
+    kb = _keyboard(mode)
+    for i, (part, pm) in enumerate(chunks, 1):
+        log.info("stats chunk %d/%d chars=%d bytes=%d plain=%s",
+                 i, len(chunks), len(part), _b(part), pm is None)
+        await reply_text(part, parse_mode=pm,
+                         reply_markup=kb if i == len(chunks) else None)
+
+
+async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_chat.id != ADMIN_ID:
+        await update.message.reply_text("⛔ Hanya admin bisa lihat stats.")
+        return
+    from telegram.constants import ChatAction
+    try:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    except Exception:
+        pass
+    busy = await update.message.reply_text("⏳ Hitung statistik...")
+    mode, days = _parse_args(context.args)
+    lines = await _generate_report(mode, days, context)
 
     try:
         await busy.delete()
     except Exception:
         pass
-    chunks = _chunks(L)
-    for i, (part, pm) in enumerate(chunks, 1):
-        log.info("stats chunk %d/%d chars=%d bytes=%d plain=%s",
-                 i, len(chunks), len(part), _b(part), pm is None)
-        await update.message.reply_text(part, parse_mode=pm)
+    await _send_report(update.message.reply_text, lines, mode)
+
+
+async def stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Tombol /stats (st:*): mode dari callback data; refresh ulangi mode sama."""
+    q = update.callback_query
+    await q.answer()
+    if update.effective_chat.id != ADMIN_ID:
+        await q.answer("⛔ Hanya admin bisa lihat stats.", show_alert=True)
+        return
+    mode = _mode_from_cb(q.data)
+    if mode is None:
+        log.warning("stats callback unknown data: %r", q.data)
+        return
+    from telegram.constants import ChatAction
+    try:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    except Exception:
+        pass
+    busy = await q.message.reply_text("⏳ Hitung statistik...")
+    lines = await _generate_report(mode, _period_days(None), context)
+
+    try:
+        await busy.delete()
+    except Exception:
+        pass
+    await _send_report(q.message.reply_text, lines, mode)
 
 
 def register(app: Application, cfg) -> None:
     app.add_handler(CommandHandler("stats", stats_cmd))
+    app.add_handler(CallbackQueryHandler(stats_callback, pattern=r"^st:"))
