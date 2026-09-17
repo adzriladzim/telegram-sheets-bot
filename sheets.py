@@ -29,6 +29,11 @@ def _q(title: str) -> str:
     """Quote a tab title for A1 ranges, escaping apostrophes (' -> '')."""
     return "'%s'" % title.replace("'", "''")
 
+
+def _row_has_data(row: list) -> bool:
+    """True if the row has any filled cell in B..L (the rekap data columns)."""
+    return any((c or "").strip() for c in row[1:12])
+
 _absen_kodes_cache: dict = {"data": None, "ts": 0}
 _absen_students_cache: dict = {}  # kode -> (ts, [(nim, nama)]); TTL see _ABSEN_STUDENTS_TTL
 _ABSEN_STUDENTS_TTL = 300
@@ -41,7 +46,17 @@ _feedback_cache: dict = {"rows": None, "ts": 0}
 # _run()'s single-flight lock, so no extra synchronization needed.
 _rows_cache: dict[tuple[str, str], tuple[float, list[list[str]]]] = {}
 _tabs_cache: dict[str, tuple[float, list[str]]] = {}
+# Rekap per-fasil separator rows (block-boundary empty rows + heavy-border rows).
+# (ss_id, title) -> (ts, [0-based row indexes]); TTL = _ROWS_TTL, invalidated on
+# rekap writes. The campus draws a thick black line under each closed period;
+# new records must go BELOW the LAST such line, never on it.
+_separator_cache: dict[tuple[str, str], tuple[float, list[int]]] = {}
 _ROWS_TTL = 300
+# Border styles that read as a "heavy" separator line (marginally SOLID_THICK).
+# Real tabs observed so far use an EMPTY row as separator; heavy borders are a
+# fallback for when campus styles the line itself.
+_BORDER_HEAVY = {"SOLID_THICK", "SOLID_MEDIUM", "DOUBLE"}
+_BORDER_MIN_WIDTH = 4
 # Worksheet titles in the Rekap spreadsheet that are NOT per-fasil tabs.
 _SYSTEM_TABS = ("PENTING DIBACA", "Template")
 SCHOOL_KEYWORDS = {
@@ -382,6 +397,73 @@ class SheetsClient:
         titles = [w.title for w in self._ss(ss_id).worksheets()]
         _tabs_cache[ss_id] = (time.time(), titles)
         return titles
+
+    def _grid_heavy_rows(self, ss_id: str, title: str) -> list[int]:
+        """0-based indexes whose B..W cells carry a HEAVY border (SOLID_THICK /
+        SOLID_MEDIUM / DOUBLE, or width >= 4). Campus's thick separator line —
+        where present — is just an empty row, so this is a fallback signal."""
+        ws = self._sheet_in(ss_id, title)
+        try:
+            resp = self._client().http_client.spreadsheets_get(
+                ss_id,
+                params={
+                    "ranges": f"{_q(title)}!A1:W{ws.row_count}",
+                    "includeGridData": "true",
+                    "fields": "sheets.data.rowData.values.userEnteredFormat",
+                },
+            )
+        except gspread.exceptions.APIError as exc:
+            raise SheetsError(f"Google API error: {exc.response.status_code}") from exc
+        out: list[int] = []
+        try:
+            data = resp["sheets"][0]["data"][0]
+        except (KeyError, IndexError):
+            return out
+        for i, row in enumerate(data.get("rowData", [])[:ws.row_count]):
+            heavy = False
+            for cell in (row.get("values") or [])[:23]:
+                if not isinstance(cell, dict):
+                    continue
+                b = (cell.get("userEnteredFormat") or {}).get("borders") or {}
+                for side in ("top", "bottom"):
+                    eb = b.get(side)
+                    if eb and (eb.get("style") in _BORDER_HEAVY
+                               or eb.get("width", 0) >= _BORDER_MIN_WIDTH):
+                        heavy = True
+                        break
+                if heavy:
+                    break
+            if heavy:
+                out.append(i)
+        return out
+
+    def _separator_rows(self, ss_id: str, title: str) -> list[int]:
+        """0-based indexes of rekap separator lines for a per-fasil tab.
+
+        Two signals, OR-ed:
+          1. block-boundary empty row — a row with no B..L values sitting
+             directly below a data row (this is how campus draws the black
+             line in the real tabs: an empty styled row);
+          2. a B..W cell with a HEAVY border (fallback for styled lines).
+        Cached like _rows_cache; invalidated on rekap writes.
+        """
+        key = (ss_id, title)
+        hit = _separator_cache.get(key)
+        if hit and time.time() - hit[0] < _ROWS_TTL:
+            return hit[1]
+        seps: set[int] = set()
+        rows = self._cached_rows(ss_id, title)
+        for i in range(1, len(rows)):
+            if not _row_has_data(rows[i]) and _row_has_data(rows[i - 1]):
+                seps.add(i)
+        try:
+            seps.update(self._grid_heavy_rows(ss_id, title))
+        except SheetsError:
+            log.warning("heavy-border scan failed for %s/%s — block-gap seps only",
+                        ss_id, title)
+        out = sorted(seps)
+        _separator_cache[key] = (time.time(), out)
+        return out
 
     @asynccontextmanager
     async def for_chat(self, chat_id: int):
@@ -1058,18 +1140,35 @@ class SheetsClient:
             name = rec.bukti_name.replace('"', "")
             row_data[10] = f'=HYPERLINK("{url}","{name}")'
         all_vals = self._cached_rows(self.cfg.rekap_sheet_id, tab)
-        insert_row = len(all_vals) + 1
-        for i, r in enumerate(all_vals):
-            if i == 0:
-                continue  # header
-            if not any((c or "").strip() for c in r[1:12]):
-                insert_row = i + 1
-                break
+        seps = self._separator_rows(self.cfg.rekap_sheet_id, tab)
+        last_sep = seps[-1] if seps else -1
+        if last_sep >= 0:
+            # Separator garis hitam ada: kandidat = baris kosong PERTAMA (B..L
+            # kosong) dengan i STRICTLY di bawah garis (i > last_sep). Gap/baris
+            # kosong DI ATAS garis TIDAK dipakai — data baru di bawah garis.
+            insert_idx = len(all_vals)
+            for i, r in enumerate(all_vals):
+                if i == 0 or i <= last_sep:
+                    continue
+                if not any((c or "").strip() for c in r[1:12]):
+                    insert_idx = i
+                    break
+            insert_row = insert_idx + 1
+        else:
+            # Tak ada separator -> perilaku lama: baris kosong pertama sesudah header.
+            insert_row = len(all_vals) + 1
+            for i, r in enumerate(all_vals):
+                if i == 0:
+                    continue  # header
+                if not any((c or "").strip() for c in r[1:12]):
+                    insert_row = i + 1
+                    break
         no = str(insert_row - 1)
         # Grid guard — "W" is the rightmost column we write (col 23).
         self._guard_grid(ws, ["W"], insert_row)
         ws.update(f"A{insert_row}:W{insert_row}", [[no] + row_data], value_input_option="USER_ENTERED")
         self._invalidate_rows(self.cfg.rekap_sheet_id, tab)
+        _separator_cache.pop((self.cfg.rekap_sheet_id, tab), None)
         _rekap_status_cache.clear()
         log.info("Wrote rekap %s/%s at %s row %d", rec.kode, rec.pertemuan, tab, insert_row)
         return insert_row
@@ -1158,6 +1257,7 @@ class SheetsClient:
             ws.spreadsheet.values_batch_update(
                 {"valueInputOption": "USER_ENTERED", "data": data})
             self._invalidate_rows(self.cfg.rekap_sheet_id, tab)
+            _separator_cache.pop((self.cfg.rekap_sheet_id, tab), None)
         log.info("Updated rekap %s row %d cols %s", tab, row_idx, sorted(cells))
 
     async def update_rekap_cells(self, tab: str, row_idx: int, cells: dict) -> None:
