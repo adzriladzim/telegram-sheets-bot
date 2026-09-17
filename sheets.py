@@ -294,9 +294,11 @@ class RekapRecord:
 
     def as_row(self) -> list[str]:
         # B..W: B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W
+        # Live header: G='Pertemuan ke-', H='SKS'. (Pernah terbalik: sks->G,
+        # pertemuan->H — bot tulis jadi Pertemuan 3, SKS 2. Diswap 2026-09-17.)
         return [
             self.tanggal, self.lecturer, self.jam, self.kode, self.subject,
-            self.sks, self.pertemuan, self.tipe, self.sesi, self.peran,
+            self.pertemuan, self.sks, self.tipe, self.sesi, self.peran,
             self.bukti, "", "",
             self.total, self.hadir, self.feedback, self.tidak, self.belum,
             "", "", "", "",
@@ -1256,8 +1258,8 @@ class SheetsClient:
 
     def _rekap_row_status(self, tab: str, kode: str, tanggal_list: list) -> dict:
         """none | complete | incomplete(+row idx, gaps). Gaps cover B-L + Total."""
-        labels = ["Tanggal", "Dosen", "Jam", "Kode", "Matkul", "SKS",
-                  "Pertemuan", "Tipe", "Sesi", "Peran", "Bukti"]
+        labels = ["Tanggal", "Dosen", "Jam", "Kode", "Matkul", "Pertemuan",
+                  "SKS", "Tipe", "Sesi", "Peran", "Bukti"]
         try:
             rows = self._rekap_match_rows(tab, kode, tanggal_list)
         except (gspread.exceptions.WorksheetNotFound, SheetsError):

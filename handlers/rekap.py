@@ -385,8 +385,8 @@ async def _start_fix(message: Message, context: ContextTypes.DEFAULT_TYPE) -> in
         return await _begin_meeting(message, context)
     def cell(i):
         return vals[i].strip() if len(vals) > i else ""
-    # Prefill: H=7 pertemuan, I=8 tipe, J=9 sesi, K=10 peran
-    if cell(7): context.user_data["meeting"] = cell(7)
+    # Prefill live header: G=6 pertemuan, H=7 sks, I=8 tipe, J=9 sesi, K=10 peran
+    if cell(6): context.user_data["meeting"] = cell(6)
     if cell(8): context.user_data["tipe"] = cell(8)
     if cell(9): context.user_data["sesi"] = cell(9)
     if cell(10): context.user_data["peran"] = cell(10)
@@ -399,6 +399,8 @@ async def _start_fix(message: Message, context: ContextTypes.DEFAULT_TYPE) -> in
     if not context.user_data.get("sesi"):
         await message.reply_text("4️⃣ Sesi kelas? (atau ketik manual)", reply_markup=_sesi_kb())
         return SESI
+    if not context.user_data.get("peran"):
+        return await _ask_peran(message, context)
     if not context.user_data.get("bukti") and "Bukti" in gaps:
         return await _ask_bukti(message, context)
     return await _confirm_fix(message, context)
@@ -489,7 +491,7 @@ async def pick_tipe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 # ---------- step 4: sesi ----------
 
-SESI_OPTS = ["Kelas Biasa", "Guest Lecture", "Workshop/E-Lab", "Lainnya"]
+SESI_OPTS = ["Kelas Biasa", "Guest Lecture", "Lainnya", "Workshop/E-Lab"]  # urutan = opsi dropdown sheet
 
 
 def _sesi_kb() -> InlineKeyboardMarkup:
@@ -772,8 +774,9 @@ async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 try:
                     cur = await _sheets(context).rekap_row_values(tab, fix_row)
                     cols = ["B", "C", "D", "E", "F", "G", "H", "I", "J", "K"]
+                    # Live header: G='Pertemuan ke-', H='SKS'
                     vals = [rec.tanggal, rec.lecturer, rec.jam, rec.kode, rec.subject,
-                            rec.sks, rec.pertemuan, rec.tipe, rec.sesi, rec.peran]
+                            rec.pertemuan, rec.sks, rec.tipe, rec.sesi, rec.peran]
                     for col, v in zip(cols, vals):
                         idx = ord(col) - 65
                         if v and (len(cur) <= idx or not cur[idx].strip()):
