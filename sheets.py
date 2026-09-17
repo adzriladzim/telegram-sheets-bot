@@ -225,13 +225,16 @@ class CancelRecord:
     facilitator: str
 
     def as_row(self) -> list[str]:
+        """Columns B..I per live header of Kelas Cancel & Pengganti:
+        B Nama Dosen, C Nama Mata Kuliah, D Kode Kelas, E Sesi, F Jadwal Awal,
+        G Jam, H SKS, I Fasil. Col A (No.) prepended at append site."""
         return [
             self.lecturer,     # B
             self.subject,      # C
-            self.jadwal_awal,  # D
-            self.jam,          # E
-            self.sesi,         # F
-            self.kode,         # G
+            self.kode,         # D
+            self.sesi,         # E
+            self.jadwal_awal,  # F
+            self.jam,          # G
             self.sks,          # H
             self.facilitator,  # I
         ]
@@ -1022,8 +1025,10 @@ class SheetsClient:
             if not has_data:
                 insert_row = i + 1
                 break
+        # Kolom A "No." berisi nomor urut berurutan (1,2,3,...) — ikutkan di write.
+        no = str(insert_row - 1)
         self._guard_grid(ws, ["I"], insert_row)
-        ws.update(f"B{insert_row}:I{insert_row}", [row_data], value_input_option="USER_ENTERED")
+        ws.update(f"A{insert_row}:I{insert_row}", [[no] + row_data], value_input_option="USER_ENTERED")
         self._invalidate_rows(self.cfg.sheet_id, self.cfg.cancel_sheet)
         log.info("Wrote cancel %s/%s at row %d", rec.kode, rec.sesi, insert_row)
         return ws.row_count
