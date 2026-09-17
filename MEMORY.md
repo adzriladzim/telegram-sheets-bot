@@ -303,16 +303,28 @@ Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, 
 - **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar → STOP, delegate vision agent. Cavemem MCP down — append manual.
 
 
-## [2026-09-17] /rekap REDESIGN � picker dari Zoom Record (bukan kelas minggu ini) � 80bfe2f..HEAD
-> **SHIPPED:** pushed. HEAD = 80bfe2f. **Railway deploy MANUAL (auto-deploy off) � klik Deploy Latest Commit.**
+## [2026-09-17] /rekap REDESIGN � picker dari Zoom Record (bukan kelas minggu ini) � 80bfe2f..HEAD
+> **SHIPPED:** pushed. HEAD = 80bfe2f. **Railway deploy MANUAL (auto-deploy off) � klik Deploy Latest Commit.**
 
-- **PICKER BARU /rekap � basis = Zoom Record fasil (col C match), bukan kelas minggu ini:**
-  - sheets.zoom_entries(name) async read-only (via _run) � list {kode, subject, tanggal?dd/mm/yyyy, pertemuan, scheme, sks, tipe, dosen, mulai, zoom, catatan, row}. Skip header + baris kosong.
-  - Klasifikasi per entri Zoom: **lengkap ? skip; rumpang ? ?? (fix row+gaps dari rekap_row_status); belum ada baris ? ?**. Urut tanggal lama?baru. Paginasi 25/halaman (� Prev / Next �).
+- **PICKER BARU /rekap � basis = Zoom Record fasil (col C match), bukan kelas minggu ini:**
+  - sheets.zoom_entries(name) async read-only (via _run) � list {kode, subject, tanggal?dd/mm/yyyy, pertemuan, scheme, sks, tipe, dosen, mulai, zoom, catatan, row}. Skip header + baris kosong.
+  - Klasifikasi per entri Zoom: **lengkap ? skip; rumpang ? ?? (fix row+gaps dari rekap_row_status); belum ada baris ? ?**. Urut tanggal lama?baru. Paginasi 25/halaman (� Prev / Next �).
   - Tombol label "{??/?} {dd/mm} {kode} p.{pertemuan}". Header "1?? Rekap yang perlu diisi (dari Zoom Record):". Bawah: "? Buat entri lain (di luar daftar)" + "? Batal" ? jalur manual = flow lama (class picker ? steps normal).
   - ?? = mode lengkapi EKSIS (prefill dari baris sheet via _start_fix, update sel). ? = PREFILL dari Zoom: tanggal/dosen/jam/kode/matkul/sks/pertemuan(termasuk "3 dan 4")/tipe (Online?Online, Offline?On-site), skip step pertemuan+tipe, sisa: sesi?peran?bukti?confirm?append (separator logic tetap).
   - Daftar kosong ? "? Semua rekap dari Zoom Record sudah lengkap." + tombol buat entri manual.
   - Callback baru: zk:{idx} pick, zkp:prev|next halaman, zk:manual/zk:cancel. State ZOOM = 8. zoom_tanggal di user_data override tanggal kelas (manual vs zoom flow).
 - **VERIFIKASI:** verify_zoom_picker.py **16/16 PASS** (offline, tanpa creds: parsing, klasifikasi 3 status, urutan, paginasi, prefill zoom?record, jalur manual). compileall OK.
 - **NEXT (user):** (1) Railway ? **Deploy Latest Commit** ? tes /rekap live: pilih ??/?, pastikan pertemuan "3 dan 4" + tipe On-site masuk, baris baru di bawah separator hitam.
-- **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar ? STOP, delegate vision agent. Cavemem MCP down � append manual.
+- **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar ? STOP, delegate vision agent. Cavemem MCP down � append manual.
+
+## [2026-09-17] FIX rekap swap Pertemuan/SKS + label dropdown — 1854543 (f94b5eb..1854543)
+> **SHIPPED:** commit `1854543` pushed `f94b5eb..1854543`. HEAD = 1854543. **Railway deploy MANUAL — klik Deploy Latest Commit → ACTIVE = 1854543, lalu tes /rekap (baris baru InVC6 dkk).**
+
+- **PROBE LIVE (read-only) menemukan akar bug — BUKAN zoom picker:**
+  - `_zoom_entries` mapping **BENAR**: raw row 397 InVC6 = D 'Jumat, 11 September 2026', H='2', J='3' → parse 11/09 p2 sks3. Kolom Zoom Record live: F=kode, G=mk(formula VLOOKUP MatkulMaster), H='Pertemuan ke-', I='Skema Kelas', J='Jumlah SKS', K='Tipe Kelas', L='Nama Dosen' (formula), M='Jam Mulai', N='Zoom'.
+  - **AKAR = tab rekap: header live G='Pertemuan ke-', H='SKS'** tapi `RekapRecord.as_row()` tulis sks→G, pertemuan→H. Bukti: rekap row14 InVC6 = G(prtm)=3, H(sks)=2 padahal truth p2/sks3 → sheet tampil "Pertemuan 3, SKS 2" (persis laporan user). Baris 3-12 (campus) layout benar (G=1,H=3) → cuma baris bot yang korup.
+- **FIX:** as_row swap (pertemuan→G idx5, sks→H idx6) + `_rekap_row_status` labels (Pertemuan idx5, SKS idx6) + `_start_fix` prefill meeting dari cell(6)=G (bukan cell(7)) + confirm_cb fix-path vals G=Pertemuan,H=SKS + **guard peran sebelum confirm** (urutan sesi→peran→bukti) + SESI_OPTS diurutkan = opsi dropdown.
+- **LABEL DROPDOWN (dataValidation live) SUDAH COCOK — tak perlu ubah:** I/Tipe=['On-site','Online'], J/Sesi=['Kelas Biasa','Guest Lecture','Lainnya','Workshop/E-Lab'], K/Peran=['Fasilitator Kelas','Moderator Guest Lecture','Backup Fasil']. Asumsi user "English chip (Class Meeting/Facilitator Class)" SALAH. `_zoom_tipe` Offline→On-site benar.
+- **VERIFIKASI:** verify_rekap_swap.py **12/12 PASS** (baru) + verify_zoom_picker **16/16 PASS** (regresi bersih) + compileall OK. verify_s3.py STALE pre-existing (pakai kwarg `reminder_hour` yang sudah dihapus) — bukan regresi.
+- **Data korup existing:** rekap row14 InVC6 (18/9, G=3/H=2) perlu perbaikan manual / isi ulang via bot setelah deploy (path fix hanya isi sel kosong — baris terisi tidak disentuh).
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent.
