@@ -1,7 +1,7 @@
 # MEMORY — telegram-sheets-bot (TelefasilBot)
 
 > Per-project memory. Read at cold session start. Append-only.
-> Updated: 2026-09-19 (HEAD ba0bddf.. — stats guard ganda user+chat + audit log, akar lolos)
+> Updated: 2026-09-19 (HEAD 873d961 — legenda ikon HELP + mini-legenda picker + README 3.10)
 
 ## What
 Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, rekap kehadiran, backup, cancel kelas langsung ke Google Sheets. Multi-user (satu bot, tiap fasil lihat jadwal sendiri). Bot: [@telefasil_bot](https://t.me/telefasil_bot).
@@ -329,6 +329,30 @@ Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, 
 - **Data korup existing:** rekap row14 InVC6 (18/9, G=3/H=2) perlu perbaikan manual / isi ulang via bot setelah deploy (path fix hanya isi sel kosong — baris terisi tidak disentuh).
 - **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent.
 
+## [2026-09-19] Legenda ikon HELP + mini-legenda picker SHIPPED 873d961 (d2ac5d6..873d961)
+> **SHIPPED:** commit `873d961` pushed `d2ac5d6..873d961`. HEAD = 873d961. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE = 873d961.**
+
+- **Isi — legenda ikon:**
+  - **Blok HELP 📌 9 ikon** — blok keterangan ikon di pesan `/help` (9 ikon dijelaskan).
+  - **Mini-legenda 4 picker** — header picker menampilkan mini-legenda 1 baris: `/zoom` (`⭐ kelas sendiri · 🔄 backup · 🧪 make-up · ✅ sudah`), `/rekap` (`🧩 lengkapi · ➕ buat baru · 🔄 backup · 🧪 make-up`), `/absen` (`⭐ sendiri · 🔄 backup · 🧪 make-up`), `/schedule` (`🔄 backup · 🧪 make-up`). README L433.
+  - **README 3.10 "Keterangan ikon"** (L417) — section ikon lengkap.
+- **Verify:** grep README 3.10 + mini-legenda (L433) — ada di disk.
+- **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE jadi **873d961**; (2) **share draf legenda ke grup WA** (draf legenda utk fasil).
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-19] /zoom picker grup bertingkat SHIPPED d2ac5d6 (ace8478..d2ac5d6)
+> **SHIPPED:** commit `d2ac5d6` pushed `ace8478..d2ac5d6`. HEAD = d2ac5d6. **Railway deploy MANUAL — klik Deploy Latest Commit → ACTIVE = d2ac5d6, lalu tes /zoom picker live.**
+
+- **Picker /zoom = 3 grup bertingkat:**
+  - **📅 MINGGU INI** — kelas minggu ini (flow normal).
+  - **⏳ SEBELUMNYA** — kelas belum di-log (tunggakan).
+  - **✅ SUDAH DI-LOG** — hidden default, toggle **👁 tampilkan / 🙈 sembunyikan**.
+- **Done key:** penentuan sudah/belum di-log pakai key SAMA dgn `get_done_by_date` (konsisten — satu sumber kebenaran, tak dobel logika).
+- **VERIFIKASI:** stub **11/11 PASS** (offline, tanpa creds).
+- **Catatan minor:** header grup kosong mungkin ikut tampil (contoh render) — cek live, hide kalau iya.
+- **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE jadi **d2ac5d6**; (2) tes /zoom: grup 📅/⏳ tampil, toggle 👁/🙈 utk ✅ SUDAH DI-LOG.
+- **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar → STOP, delegate vision agent. Cavemem MCP down — append manual.
+
 ## [2026-09-18] Auto-registrasi cukup-ketik-nama SHIPPED ba0bddf (ef217b0..ba0bddf)
 > **SHIPPED:** commit `ba0bddf` pushed `ef217b0..ba0bddf`. HEAD = ba0bddf. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE = ba0bddf, lalu tes user baru ketik nama langsung (tanpa /register).**
 
@@ -355,7 +379,7 @@ Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, 
 - **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar → STOP, delegate vision agent. Cavemem MCP down — append manual.
 
 ## [2026-09-19] Stats guard ganda user+chat + audit log
-> **SHIPPED:** fix guard /stats & /darurat. **Railway deploy MANUAL — klik Deploy Latest Commit → ACTIVE = HEAD, lalu tes /stats switch akun.**
+> **SHIPPED:** commit `ace8478` pushed `ba0bddf..ace8478`. HEAD = ace8478. **Railway deploy MANUAL — klik Deploy Latest Commit → ACTIVE = ace8478, lalu tes /stats switch akun.**
 
 - **LAPORAN USER:** akun fasil lain kirim /stats → TETAP dapat laporan lengkap (15/20 fasil aktif, 171 aksi). Guard lama `effective_chat.id != ADMIN_ID` (stats.py) diduga lolos di build yang jalan.
 - **INVESTIGASI AKAR (git):** `git log -S ADMIN_ID -- handlers/stats.py` = cuma 2 commit (a1b91ff, 44e647a). `git show` SEMUA versi committed (44e647a, b978525, e5233a6, ..., ba0bddf) — guard `effective_chat.id != ADMIN_ID` ADA + indent benar + `return` ada sejak ROOT. **TIDAK ADA versi guard `if False`/None/salah-indent/return-lupa di repo ini.**
@@ -365,4 +389,18 @@ Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, 
 - **Entry lain:** /stats cuma 1 CommandHandler (bot.py BotCommand menu OK) + 1 CallbackQueryHandler pattern ^st: — tak ada jalur kedua tanpa guard.
 - **VERIFIKASI:** `py -m compileall` OK + stub **verify_stats_guard.py 13/13 PASS** (cmd/cb non-admin deny+log, admin served+log, OR user/chat, unknown cb) + **verify_stats_callback.py 19/19 PASS** regresi. verify*.py tidak di-track (pola existing).
 - **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE; (2) tes live: akun fasil lain /stats → ⛔ + log denied; admin → sukses + log served; (3) cek Railway log utk baris `stats denied`/`stats served`.
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent.
+
+## [2026-09-19] FIX header pengisi absen: nh+3, bukan nh+1 — probe live
+> **SHIPPED:** commit ini. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE = commit ini, lalu tes /absen: nama pengisi mendarat di baris NAMA (di bawah nomor sesi), bukan menimpa angka 1..16.**
+
+- **LAPORAN USER:** FDrw3 sesi 1 di-log — nama pengisi muncul nyempil di deretan ANKA pertemuan, header kolom sesi 1 tak berubah (screenshot).
+- **PROBE LIVE READ-ONLY (`verify_pengisi_probe.py`, untracked):** dump FDrw3 (VCD tab) + scan seluruh absen utk nama "Adzril Adzim Hendrynov" & "Muhammad Rayhan F".
+  - **GEOMETRI BLOK NYATA (konsisten SEMUA tab):** row `nim_header` (0-based) = "NIM | Nama Mahasiswa | Mode Kelas Asal | Sesi Pertemuan yang Diikuti"; row `nim_header+1` = baris ANGKA pertemuan (D=1..S=16); row `nim_header+2` = baris NAMA pengisi (manusia tulis nama persis di kolom pertemuan, di bawah angkanya). Kolom sesi p = D+(p-1). Bukti hits: FoLA1 (AI) NIM=145, angka=146, nama=147; PrBs3 (IS) 918/919/920; InVC6 (VCD) 396/397/398; PPC01 (IE) 265/266/267 — semua nama manusia di `nh+2`.
+  - WDC05 tidak ada di absen (konsisten temuan lama cfbdd59).
+  - FDrw3 hanya 1 blok (VCD), baris angka utuh saat probe → nama bot incident sudah dibersihkan manual; geometri tetap terbukti dari blok lain.
+- **AKAR BUG 88d1fee:** `_update_absen` tulis header ke `nh + 1` — padahal `nh` 0-based dan A1 1-based → mendarat di baris NIM/angka (menimpa/serempet "Sesi Pertemuan yang Diikuti" & angka 1..16), bukan baris nama `nh+2` (A1 = `nh+3`). Meleset **1 baris ke atas** (bukan masalah kolom).
+- **FIX sheets.py:** header_cells `nh + 1` → `nh + 3` (A1) = 0-based `nh+2`. Kolom tetap `3+(pertemuan-1)`. Multi-blok & last-filler-wins dipertahankan.
+- **VERIFIKASI:** `verify_absen_header.py` fixture di-update ke geometri nyata (baris angka + baris nama) → **16/16 PASS** (header = `'Ilkom'!D5/D12`, `'Manajemen'!D4`, `G5` utk pertemuan 4; angka tak disentuh). compileall OK. verify_725423d.py STALE pre-existing (kwarg `reminder_hour` dihapus — bukan regresi).
+- **NEXT (user):** Railway → Deploy Latest Commit; tes /absen → nama pengisi di baris nama, angka 1..16 tetap utuh.
 - **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent.

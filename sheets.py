@@ -1007,9 +1007,13 @@ class SheetsClient:
             data.append({"range": f"{_q(title)}!{col_letter}{r_idx+1}", "values": [[status]]})
             written_titles.add(title)
             updated += 1
-        # Sheet convention (client manual habit): the header cell of the meeting
-        # column (row nim_header, col D..S) holds the full name of the facilitator
-        # who filled it — overwrite in place, last filler wins. One write per
+        # Sheet convention (client manual habit, verified live by probe): a block
+        # header is three rows under "Kode Kelas" — row nim_header = "NIM/Nama
+        # Mahasiswa/Mode", row nim_header+1 (0-based) = the meeting NUMBERS row
+        # (D=1..S=16), row nim_header+2 (0-based) = the filler NAME row where
+        # humans write the facilitator's full name in the meeting column right
+        # below its number. In A1 notation (1-based rows) that name row sits at
+        # nh+3. The name overwrites in place, last filler wins. One write per
         # touched block so a multi-prodi class is stamped in every sheet.
         pengisi = (pengisi or "").strip()
         header_cells: list[str] = []
@@ -1021,7 +1025,7 @@ class SheetsClient:
             for title in sorted(written_titles):
                 for nh in nim_headers.get(title, []) or []:
                     if nh >= 0:
-                        header_cells.append(f"{_q(title)}!{col_letter}{nh + 1}")
+                        header_cells.append(f"{_q(title)}!{col_letter}{nh + 3}")
                         data.append({"range": header_cells[-1], "values": [[pengisi]]})
         if data:
             self._ss(self.cfg.absen_sheet_id).values_batch_update(

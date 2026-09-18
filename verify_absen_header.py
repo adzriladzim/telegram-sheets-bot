@@ -2,8 +2,10 @@
 
 Run:  py verify_absen_header.py
 Covers:
-  1. _update_absen(pengisi=...) writes the full name into the meeting header cell
-     (row nim_header, col pertemuan D..S) for EVERY touched block (multi-blok)
+  1. _update_absen(pengisi=...) writes the full name into the filler-NAME row
+     (A1 row nim_header+3 = 0-based nim_header+2, col pertemuan D..S — directly
+     below the meeting NUMBERS row, per live convention verified by
+     verify_pengisi_probe.py) for EVERY touched block (multi-blok)
   2. no pengisi -> no header write (backward compat, old stub still passes)
   3. confirm_cb: stale guard returns END with the "sesi selesai" message
   4. confirm_cb success: reply includes "Pengisi:", buttons dropped, usage.log called
@@ -99,16 +101,27 @@ def fresh_client():
     return c, gc
 
 
-# Same fixture as verify_725423d.py: multi-blok class CS101 across 2 tabs.
+# Real block geometry (verified live by verify_pengisi_probe.py):
+#   row "Kode Kelas" -> legend rows -> row nim_header "NIM" -> nim_header+1
+#   numbers row (D=1..S=16) -> nim_header+2 filler-NAME row -> blank -> students.
+_NUM = ["D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S"]  # unused labels
+numbers_row = ["D"] + [str(p) for p in range(1, 17)]
+numbers_row = [""] * 3 + [str(p) for p in range(1, 17)]   # A,B,C empty; D..S = 1..16
+name_row = [""] * 19
+
 absen_ilkom = FakeWorksheet("Ilkom", [
     ["JADWAL ABSEN HARI 1"],
     ["Kode Kelas", "CS101"],
     ["NIM", "Nama", "Mode"],
-    [],
+    [""] * 3 + [str(p) for p in range(1, 17)],  # numbers row nh+1
+    list(name_row),                               # filler-name row nh+2
+    [],                                           # blank
     ["26111600001", "Ahmad", "O", "O"],
     ["Program Studi", "Ilmu Komputer"],
     ["Kode Kelas", "CS101"],
     ["NIM", "Nama", "Mode"],
+    [""] * 3 + [str(p) for p in range(1, 17)],  # numbers row nh+1
+    list(name_row),                               # filler-name row nh+2
     [],
     ["26111600003", "Citra", "S", "S"],
     ["Program Studi", "Sistem Informasi"],
@@ -116,6 +129,8 @@ absen_ilkom = FakeWorksheet("Ilkom", [
 absen_manajemen = FakeWorksheet("Manajemen", [
     ["Kode Kelas", "CS101"],
     ["NIM", "Nama", "Mode"],
+    [""] * 3 + [str(p) for p in range(1, 17)],  # numbers row nh+1
+    list(name_row),                               # filler-name row nh+2
     [],
     ["26111600002", "Dewi", "A", "A"],
     ["Program Studi", "Manajemen"],
@@ -123,7 +138,8 @@ absen_manajemen = FakeWorksheet("Manajemen", [
 
 c, gc = fresh_client()
 gc.spreadsheets[SS_ABSEN] = FakeSpreadsheet(SS_ABSEN, [absen_ilkom, absen_manajemen])
-NIM_HEADERS = {"Ilkom": (3, 8), "Manajemen": (2)}  # 1-based header rows per block
+# 0-based "NIM" header rows per block: Ilkom 2 & 8, Manajemen 1.
+NIM_HEADERS = {"Ilkom": (2, 8), "Manajemen": (1)}
 
 # ---------- 1. header write, multi-blok ----------
 upd = c._update_absen("CS101", 1, ["Ahmad", "Dewi", "26111600003"], "S", pengisi="Raihan Syahputra")
@@ -131,11 +147,11 @@ payload = gc.spreadsheets[SS_ABSEN].batch_updates[-1]
 check("multi-blok update writes 3 status + 3 header cells",
       len(payload["data"]) == 6, f"got {len(payload['data'])}")
 header_ranges = {d["range"] for d in payload["data"] if d["values"] == [["Raihan Syahputra"]]}
-check("header written on EVERY touched block (Ilkom x2 + Manajemen)",
-      header_ranges == {"'Ilkom'!D3", "'Ilkom'!D8", "'Manajemen'!D2"}, f"got {header_ranges}")
+check("header (name) written on EVERY touched block at A1 row nim_header+3",
+      header_ranges == {"'Ilkom'!D5", "'Ilkom'!D12", "'Manajemen'!D4"}, f"got {header_ranges}")
 status_ranges = {d["range"] for d in payload["data"] if d["values"] == [["S"]]}
 check("status cells unchanged",
-      status_ranges == {"'Ilkom'!D5", "'Ilkom'!D10", "'Manajemen'!D4"}, f"got {status_ranges}")
+      status_ranges == {"'Ilkom'!D7", "'Ilkom'!D14", "'Manajemen'!D6"}, f"got {status_ranges}")
 check("result returns pengisi", upd.get("pengisi") == "Raihan Syahputra", f"got {upd.get('pengisi')}")
 check("result lists header cells", set(upd.get("header_cells", [])) == header_ranges,
       f"got {upd.get('header_cells')}")
@@ -144,9 +160,14 @@ check("result lists header cells", set(upd.get("header_cells", [])) == header_ra
 gc.spreadsheets[SS_ABSEN].batch_updates.clear()
 c._update_absen("CS101", 4, ["Ahmad"], "O", pengisi="Raihan Syahputra")
 p4 = gc.spreadsheets[SS_ABSEN].batch_updates[-1]
-check("pertemuan 4 header lands in col G",
-      "'Ilkom'!G3" in {d["range"] for d in p4["data"]},
+check("pertemuan 4 header lands in col G at A1 row nim_header+3",
+      "'Ilkom'!G5" in {d["range"] for d in p4["data"]},
       f"got {[d['range'] for d in p4['data']]}")
+# verify the NAME row (0-based nh+2), not the numbers row (0-based nh+1), is targeted:
+p4rng = {d["range"] for d in p4["data"]}
+check("pertemuan 4 write does NOT touch numbers row (E..S row 4)",
+      "'Ilkom'!G4" not in p4rng and "'Ilkom'!D4" not in p4rng,
+      f"got {p4rng}")
 
 # ---------- 2. no pengisi -> no header write ----------
 gc.spreadsheets[SS_ABSEN].batch_updates.clear()
