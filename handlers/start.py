@@ -64,7 +64,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     status = (
         f"Terdaftar sebagai: {html.escape(facilitator)}"
         if facilitator
-        else "⚠️ Belum terdaftar.\nKetik /register &lt;nama fasilitator&gt; dulu, contoh:\n/register Adzril Adzim Hendrynov"
+        else "⚠️ Belum terdaftar.\nKetik /register &lt;nama fasilitator&gt; dulu, contoh:\n/register Adzril Adzim Hendrynov\nAtau cukup ketik namamu saja — aku cari otomatis."
     )
     await update.message.reply_text(
         f"👋 Halo {first}!\n\n"
