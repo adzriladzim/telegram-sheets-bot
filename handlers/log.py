@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import logging
+from datetime import date, datetime, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
 from telegram.constants import ParseMode
@@ -39,6 +40,127 @@ async def _fetch_classes(context: ContextTypes.DEFAULT_TYPE, facilitator_name: s
     return classes
 
 
+# ---------- picker grup bertingkat (kombinasi 1+2) ----------
+
+def _dmy_to_date(s: str) -> date:
+    d, m, y = s.split("/")
+    return datetime(int(y), int(m), int(d)).date()
+
+
+def _week_span(today=None):
+    """(Senin, Minggu) minggu WIB ini. `today` hanya untuk test."""
+    t = today or datetime.now(sheets.WIB)
+    mon = t - timedelta(days=t.weekday())
+    return mon.date(), (mon + timedelta(days=6)).date()
+
+
+def _class_done_key(c: sheets.ClassEntry) -> tuple[str, str]:
+    """(kode.casefold(), dd/mm/yyyy) — konvensi SAMA dgn done_by_date sheets."""
+    if c.category in ("Backup", "Make-up"):
+        if c.backup_hari_tanggal:
+            return (c.code.casefold(), _parse_backup_date(c.backup_hari_tanggal))
+        return (c.code.casefold(), "")
+    return (c.code.casefold(), sheets.last_date_for_day(c.day))
+
+
+def _class_week_date(c: sheets.ClassEntry, mon, sun):
+    """Tanggal kelas yg jatuh di minggu ini (date) atau None.
+    Personal: last hari dalam minggu; jika last < Senin tapi next masih
+    di minggu ini -> jadwal mendatang (next). Backup/Make-up: tanggal eksplisit."""
+    if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
+        try:
+            d = _dmy_to_date(_parse_backup_date(c.backup_hari_tanggal))
+        except Exception:
+            return None
+        return d if mon <= d <= sun else None
+    try:
+        last = _dmy_to_date(sheets.last_date_for_day(c.day))
+        nxt = _dmy_to_date(sheets.next_date_for_day(c.day))
+    except Exception:
+        return None
+    if mon <= last <= sun:
+        return last
+    if last < mon and mon <= nxt <= sun:
+        return nxt
+    return None
+
+
+def _class_sort_date(c: sheets.ClassEntry) -> date:
+    """Tanggal rujukan utk urut lama->baru dalam grup."""
+    if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
+        try:
+            return _dmy_to_date(_parse_backup_date(c.backup_hari_tanggal))
+        except Exception:
+            return date.max
+    try:
+        return _dmy_to_date(sheets.last_date_for_day(c.day))
+    except Exception:
+        return date.max
+
+
+def _group_picker_classes(classes: list[sheets.ClassEntry], done_by_date: set, today=None):
+    """Klasifikasi 3 grup: MINGGU INI / SEBELUMNYA (belum di-log) / SUDAH DI-LOG.
+    Masing-masing urut tanggal lama->baru. `today` hanya untuk test (WIB)."""
+    mon, sun = _week_span(today)
+    week: list[tuple[date, sheets.ClassEntry]] = []
+    arrears: list[sheets.ClassEntry] = []
+    done: list[sheets.ClassEntry] = []
+    for c in classes:
+        if _class_done_key(c) in done_by_date:
+            done.append(c)
+            continue
+        wd = _class_week_date(c, mon, sun)
+        if wd is not None:
+            week.append((wd, c))
+        else:
+            arrears.append(c)
+    week.sort(key=lambda t: t[0])
+    arrears.sort(key=_class_sort_date)
+    done.sort(key=_class_sort_date)
+    return [c for _, c in week], arrears, done
+
+
+def _class_label(c: sheets.ClassEntry, done_by_date: set) -> str:
+    """Label lama: {✅}🔄/🧪 kode — matkul (tgl)."""
+    prefix = "✅ " if _class_done_key(c) in done_by_date else ""
+    if c.category == "Backup":
+        return f"{prefix}🔄 {c.code} — {c.subject} ({c.backup_hari_tanggal})"
+    if c.category == "Make-up":
+        return f"{prefix}🧪 {c.code} — {c.subject} ({c.backup_hari_tanggal})"
+    return f"{prefix}{c.code} — {c.subject} ({c.day} {c.time_range})"
+
+
+def _build_class_view(classes: list[sheets.ClassEntry], done_by_date: set, show_done: bool = False, today=None):
+    """(text, kb_rows) picker grup bertingkat. Header grup = baris teks non-interaktif
+    (pola absen). Grup SUDAH DI-LOG tersembunyi default; toggle zoom_show_done menampilkannya."""
+    week, arrears, done = _group_picker_classes(classes, done_by_date, today)
+    groups = [("📅 MINGGU INI", week), ("⏳ SEBELUMNYA (belum di-log)", arrears)]
+    if show_done:
+        groups.append(("✅ SUDAH DI-LOG", done))
+    text_parts = []
+    if week or arrears:
+        text_parts.append("1️⃣ Pilih kelas: (✅ = sudah isi untuk jadwal terakhir)")
+    else:
+        text_parts.append("Tidak ada kelas minggu ini")
+    for header, items in groups:
+        if items:
+            text_parts.append(f"— {header} —")
+    text = "\n".join(text_parts)
+    kb_rows = []
+    idx = 0  # indeks tombol = posisi di classes terurut (week+arrears+done)
+    for _, items in groups:
+        for c in items:
+            kb_rows.append([InlineKeyboardButton(_class_label(c, done_by_date), callback_data=f"c:{idx}")])
+            idx += 1
+    if done:
+        if show_done:
+            kb_rows.append([InlineKeyboardButton("🙈 Sembunyikan sudah di-log", callback_data="vd:0")])
+        else:
+            kb_rows.append([InlineKeyboardButton(f"👁 ({len(done)}) sudah di-log", callback_data="vd:1")])
+    kb_rows.append([InlineKeyboardButton("❌ Batal", callback_data="back:cancel")])
+    return text, kb_rows
+
+
 # ---------- step 1: pick class ----------
 
 async def cmd_log(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -70,26 +192,15 @@ async def cmd_log(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
         done_by_date = await _sheets(context).get_done_by_date(facilitator)
     except Exception: done_by_date = set()
-    kb_rows = []
-    for i, c in enumerate(classes):
-        last_date = sheets.last_date_for_day(c.day) if c.category not in ("Backup", "Make-up") else c.backup_hari_tanggal.split(",")[-1].strip() if "," in c.backup_hari_tanggal else c.backup_hari_tanggal
-        if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
-            try:
-                last_date = _parse_backup_date(c.backup_hari_tanggal)
-            except Exception: pass
-        is_done = (c.code.casefold(), last_date) in done_by_date
-        prefix = "✅ " if is_done else ""
-        if c.category == "Backup":
-            label = f"{prefix}🔄 {c.code} — {c.subject} ({c.backup_hari_tanggal})"
-        elif c.category == "Make-up":
-            label = f"{prefix}🧪 {c.code} — {c.subject} ({c.backup_hari_tanggal})"
-        else:
-            label = f"{prefix}{c.code} — {c.subject} ({c.day} {c.time_range})"
-        kb_rows.append([InlineKeyboardButton(label, callback_data=f"c:{i}")])
-    kb_rows.append([InlineKeyboardButton("❌ Batal", callback_data="back:cancel")])
-    kb = InlineKeyboardMarkup(kb_rows)
+    week, arrears, done = _group_picker_classes(classes, done_by_date)
+    ordered = week + arrears + done
+    context.user_data["classes"] = ordered
+    context.user_data["done_by_date"] = done_by_date
+    show_done = bool(context.user_data.get("zoom_show_done"))
+    text, kb_rows = _build_class_view(ordered, done_by_date, show_done)
     context.user_data["class_kb"] = kb_rows
-    await update.effective_message.reply_text("1️⃣ Pilih kelas: (✅ = sudah isi untuk jadwal terakhir)", reply_markup=kb)
+    context.user_data["class_text"] = text
+    await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb_rows))
     return CLASS
 
 
@@ -109,7 +220,27 @@ async def back_to_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     if not kb_rows:
         await q.message.reply_text("Kembali ke awal — kirim /zoom lagi.")
         return ConversationHandler.END
-    await q.message.reply_text("1️⃣ Pilih kelas:", reply_markup=InlineKeyboardMarkup(kb_rows))
+    await q.message.reply_text(context.user_data.get("class_text") or "1️⃣ Pilih kelas:",
+                               reply_markup=InlineKeyboardMarkup(kb_rows))
+    return CLASS
+
+
+async def toggle_done_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query
+    await q.answer()
+    classes = context.user_data.get("classes") or []
+    if not classes:
+        await q.message.reply_text("Kembali ke awal — kirim /zoom lagi.")
+        return ConversationHandler.END
+    context.user_data["zoom_show_done"] = q.data == "vd:1"
+    done_by_date = context.user_data.get("done_by_date") or set()
+    text, kb_rows = _build_class_view(classes, done_by_date, context.user_data.get("zoom_show_done"))
+    context.user_data["class_kb"] = kb_rows
+    context.user_data["class_text"] = text
+    try:
+        await q.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb_rows))
+    except Exception:
+        await q.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb_rows))
     return CLASS
 
 
@@ -398,7 +529,9 @@ def register(app: Application, cfg: Config) -> None:
         entry_points=[CommandHandler(["log", "zoom", "zoom_record"], cmd_log),
                       CallbackQueryHandler(cmd_log, pattern=r"^go:log$")],
         states={
-            CLASS: [CallbackQueryHandler(pick_class, pattern=r"^c:\d+$"), CallbackQueryHandler(back_cancel, pattern=r"^back:cancel$")],
+            CLASS: [CallbackQueryHandler(pick_class, pattern=r"^c:\d+$"),
+                    CallbackQueryHandler(toggle_done_view, pattern=r"^vd:[01]$"),
+                    CallbackQueryHandler(back_cancel, pattern=r"^back:cancel$")],
             MEETING: [CallbackQueryHandler(pick_meeting, pattern=r"^m:"), CallbackQueryHandler(back_to_class, pattern=r"^back:class$"), MessageHandler(_SKIP_FILTER, enter_meeting)],
             SKEMA: [CallbackQueryHandler(pick_scheme, pattern=r"^s:[of]$"), CallbackQueryHandler(back_to_meeting, pattern=r"^back:meeting$")],
             ZOOM: [MessageHandler(_SKIP_FILTER, enter_zoom)],
