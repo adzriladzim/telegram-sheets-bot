@@ -437,6 +437,18 @@ def _parse_args(args: list[str] | None) -> tuple[str, int]:
     return mode, _period_days(period_arg)
 
 
+def _actor(update: Update) -> tuple:
+    """(user_id, username, chat_id) — None-safe buat guard admin ganda."""
+    u = getattr(update, "effective_user", None)
+    c = getattr(update, "effective_chat", None)
+    return (getattr(u, "id", None), getattr(u, "username", None), getattr(c, "id", None))
+
+
+def _admin_ok(uid, cid) -> bool:
+    """Admin = effective_user admin ATAU chat admin (private admin chat)."""
+    return uid == ADMIN_ID or cid == ADMIN_ID
+
+
 def _mode_from_cb(cb: str | None) -> str | None:
     """Callback data -> mode ("ringan"|"ringkas"|"lengkap"), None if unknown."""
     if cb == "st:detail":
@@ -517,16 +529,19 @@ async def _send_report(reply_text, lines: list[str], mode: str) -> None:
 
 
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_chat.id != ADMIN_ID:
+    uid, uname, cid = _actor(update)
+    if not _admin_ok(uid, cid):
+        log.warning("stats denied chat=%s user=%s (@%s)", cid, uid, uname)
         await update.message.reply_text("⛔ Hanya admin bisa lihat stats.")
         return
+    mode, days = _parse_args(context.args)
+    log.info("stats served to chat=%s user=%s mode=%s", cid, uid, mode)
     from telegram.constants import ChatAction
     try:
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+        await context.bot.send_chat_action(chat_id=cid, action=ChatAction.TYPING)
     except Exception:
         pass
     busy = await update.message.reply_text("⏳ Hitung statistik...")
-    mode, days = _parse_args(context.args)
     lines = await _generate_report(mode, days, context)
 
     try:
@@ -540,16 +555,19 @@ async def stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Tombol /stats (st:*): mode dari callback data; refresh ulangi mode sama."""
     q = update.callback_query
     await q.answer()
-    if update.effective_chat.id != ADMIN_ID:
+    uid, uname, cid = _actor(update)
+    if not _admin_ok(uid, cid):
+        log.warning("stats denied chat=%s user=%s (@%s)", cid, uid, uname)
         await q.answer("⛔ Hanya admin bisa lihat stats.", show_alert=True)
         return
     mode = _mode_from_cb(q.data)
     if mode is None:
         log.warning("stats callback unknown data: %r", q.data)
         return
+    log.info("stats served to chat=%s user=%s mode=%s", cid, uid, mode)
     from telegram.constants import ChatAction
     try:
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+        await context.bot.send_chat_action(chat_id=cid, action=ChatAction.TYPING)
     except Exception:
         pass
     busy = await q.message.reply_text("⏳ Hitung statistik...")

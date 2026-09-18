@@ -1,7 +1,7 @@
 # MEMORY — telegram-sheets-bot (TelefasilBot)
 
 > Per-project memory. Read at cold session start. Append-only.
-> Updated: 2026-09-17 (HEAD 80bfe2f — /rekap zoom-record picker REDESIGN)
+> Updated: 2026-09-19 (HEAD ba0bddf.. — stats guard ganda user+chat + audit log, akar lolos)
 
 ## What
 Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, rekap kehadiran, backup, cancel kelas langsung ke Google Sheets. Multi-user (satu bot, tiap fasil lihat jadwal sendiri). Bot: [@telefasil_bot](https://t.me/telefasil_bot).
@@ -327,4 +327,42 @@ Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, 
 - **LABEL DROPDOWN (dataValidation live) SUDAH COCOK — tak perlu ubah:** I/Tipe=['On-site','Online'], J/Sesi=['Kelas Biasa','Guest Lecture','Lainnya','Workshop/E-Lab'], K/Peran=['Fasilitator Kelas','Moderator Guest Lecture','Backup Fasil']. Asumsi user "English chip (Class Meeting/Facilitator Class)" SALAH. `_zoom_tipe` Offline→On-site benar.
 - **VERIFIKASI:** verify_rekap_swap.py **12/12 PASS** (baru) + verify_zoom_picker **16/16 PASS** (regresi bersih) + compileall OK. verify_s3.py STALE pre-existing (pakai kwarg `reminder_hour` yang sudah dihapus) — bukan regresi.
 - **Data korup existing:** rekap row14 InVC6 (18/9, G=3/H=2) perlu perbaikan manual / isi ulang via bot setelah deploy (path fix hanya isi sel kosong — baris terisi tidak disentuh).
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent.
+
+## [2026-09-18] Auto-registrasi cukup-ketik-nama SHIPPED ba0bddf (ef217b0..ba0bddf)
+> **SHIPPED:** commit `ba0bddf` pushed `ef217b0..ba0bddf`. HEAD = ba0bddf. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE = ba0bddf, lalu tes user baru ketik nama langsung (tanpa /register).**
+
+- **Onboarding baru — "cukup ketik nama aja":** handler `text_unregistered` ada di **group 1** (PTB: group 0 = ConversationHandler `/register`; group 1 tetap jalan setelah conv selesai — verified).
+- **Guard WAITING:** flag `user_data[WAITING]` cegah `text_unregistered` nyelak flow `/register` di group 0. **Guard REG_JUST:** `user_data.pop(REG_JUST) == name` → cegah duplicate lookup group 1 utk nama yang BARU diproses group 0.
+- **Tombol `rgn:{i}` di luar conv** — user yang belum terdaftar, ketik nama → bot daftarkan + tampilkan tombol registrasi (rgn picker).
+- **/start clue baru** — copy onboarding arahkan "tinggal ketik nama".
+- **VERIFIKASI:** stub **15/15 PASS** (offline, tanpa creds) — alur ketik-nama, guard WAITING/REG_JUST, PTB group1 jalan setelah conv.
+- **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE jadi **ba0bddf**; (2) tes live: user baru (belum terdaftar) ketik nama di chat bot → harus langsung daftar tanpa `/register`.
+- **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar → STOP, delegate vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-18] Kelas make-up READ-ONLY SHIPPED ef217b0 (c5eec48..ef217b0)
+> **SHIPPED:** commit `ef217b0` pushed `c5eec48..ef217b0`. HEAD = ef217b0. **Railway deploy MANUAL — klik Deploy Latest Commit → ACTIVE = ef217b0, lalu tes `/schedule` + `/zoom` make-up.**
+
+- **`get_all_loggable_classes` → TUPLE-3 (personal, backup, makeup):** 6 call-site di-update (absen picker, schedule, reminder, zoom, rekap, cancel). Kelas make-up = kelas cancel milik user yang dijadwal ulang (tag L).
+- **Label make-up:** badge `🧪` (bukan emoji lain) di tombol picker & baris jadwal.
+- **`/schedule`:** render tanggal L (tanggal make-up) + catatan make-up utk kelas cancel milik user.
+- **Support make-up:** `/reminder`, `/zoom`, `/rekap`, `/absen` paham kelas make-up (scheme/tipe dari kelas asal).
+- **Kolom J filter:** kelas dengan J = `true`/`t` (exclude) TIDAK pernah ikut picker/loggable — bukan sekadar tampilan, read path memfilter.
+- **WRITE path TIDAK disentuh:** tulis J–R untuk kelas make-up TIDAK PERNAH dilakukan bot (read-only integration, by design).
+- **VERIFIKASI:** stub **20/20 PASS** (offline, tanpa creds) — expand tuple-3, filter J, label 🧪, schedule tanggal L, cancel-milik-user.
+- **Skew git:** range `c5eec48..ef217b0` — `c5eec48` tak tercatat di memory (terakhir `f94b5eb..1854543`). Pola rebase/force-push existing — verifikasi `git log --oneline -8` sebelum asumsi.
+- **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE jadi **ef217b0**; (2) tes `/schedule` kelas make-up (tanggal L + catatan); (3) tes `/zoom` pilih kelas make-up 🧪.
+- **Rules tetap:** sync gspread di update handler = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); attach gambar → STOP, delegate vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-19] Stats guard ganda user+chat + audit log
+> **SHIPPED:** fix guard /stats & /darurat. **Railway deploy MANUAL — klik Deploy Latest Commit → ACTIVE = HEAD, lalu tes /stats switch akun.**
+
+- **LAPORAN USER:** akun fasil lain kirim /stats → TETAP dapat laporan lengkap (15/20 fasil aktif, 171 aksi). Guard lama `effective_chat.id != ADMIN_ID` (stats.py) diduga lolos di build yang jalan.
+- **INVESTIGASI AKAR (git):** `git log -S ADMIN_ID -- handlers/stats.py` = cuma 2 commit (a1b91ff, 44e647a). `git show` SEMUA versi committed (44e647a, b978525, e5233a6, ..., ba0bddf) — guard `effective_chat.id != ADMIN_ID` ADA + indent benar + `return` ada sejak ROOT. **TIDAK ADA versi guard `if False`/None/salah-indent/return-lupa di repo ini.**
+- **KENAPA LOLOS:** (1) `eedeb629` — commit deploy ACTIVE pertama per MEMORY [2026-09-11] — **MISSING dari git repo** (unknown revision). Riwayat ter-rebase/force-push (pola skew existing; lihat entri 4e9e344/88d1fee/e686cec). Build Railway ACTIVE TIDAK bisa diverifikasi dari repo — kemungkinan besar jalan dari commit pre-rebase dengan stats.py beda/tanpa guard. (2) Kelemahan struktural guard lama: HANYA cek `effective_chat.id`. Di PRIVATE chat id = user id → benar; di GROUP chat id != user id → salah principal (cek chat, bukan user). (3) verified via stub — guard ganda None-safe.
+- **FIX (stats.py):** guard ganda `_admin_ok(uid, cid)` — izinkan HANYA jika `effective_user.id == ADMIN_ID ATAU effective_chat.id == ADMIN_ID`; keduanya beda → DITOLAK + `log.warning("stats denied chat=%s user=%s (@%s)")`. Jalur sukses: `log.info("stats served to chat=%s user=%s mode=%s")` (cmd & callback) — audit trail permanen di Railway. `_actor()` None-safe (stub lama tetap pass).
+- **FIX (darurat.py):** guard lama sama `effective_chat.id` → di-upgrade guard ganda + log denied (entry admin-only lain yang TERGUARD tapi same-principal bug).
+- **Entry lain:** /stats cuma 1 CommandHandler (bot.py BotCommand menu OK) + 1 CallbackQueryHandler pattern ^st: — tak ada jalur kedua tanpa guard.
+- **VERIFIKASI:** `py -m compileall` OK + stub **verify_stats_guard.py 13/13 PASS** (cmd/cb non-admin deny+log, admin served+log, OR user/chat, unknown cb) + **verify_stats_callback.py 19/19 PASS** regresi. verify*.py tidak di-track (pola existing).
+- **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE; (2) tes live: akun fasil lain /stats → ⛔ + log denied; admin → sukses + log served; (3) cek Railway log utk baris `stats denied`/`stats served`.
 - **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent.
