@@ -59,7 +59,7 @@ async def cmd_absen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["absen_backup"] = backup_kodes
     context.user_data["absen_makeup"] = makeup_kodes
     kb = _kode_kb(my_today, my_other, today, backup_kodes, makeup_kodes)
-    await update.effective_message.reply_text(f"1️⃣ Pilih Kode Kelas: ({len(my_today)} hari ini)", reply_markup=kb)
+    await update.effective_message.reply_text("1️⃣ Pilih Kode Kelas: (⭐ sendiri · 🔄 backup · 🧪 make-up)", reply_markup=kb)
     context.user_data["absen_kodes"] = list(my_kodes)
     return KODE
 

@@ -40,7 +40,7 @@ async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     today = sheets.today_day_wib()
     today_full = sheets.today_str_wib()
     from handlers.log import _parse_backup_date
-    lines = ["🗓 <b>Jadwal Kelas Minggu Ini</b>", ""]
+    lines = ["🗓 <b>Jadwal Kelas Minggu Ini</b> (🔄 backup · 🧪 make-up)", ""]
     for day in sheets.DAY_ORDER:
         for c in by_day.get(day, []):
             if c.category == "Make-up":

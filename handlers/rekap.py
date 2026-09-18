@@ -222,7 +222,7 @@ async def zoom_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     if not kb_rows:
         await q.message.reply_text(f"Tidak ada kelas untuk {context.user_data.get('facilitator', '')}.")
         return ConversationHandler.END
-    await q.message.reply_text("1️⃣ Pilih kelas: (✅ = lengkap, ⚠️ = rumpang/lengkapi)", reply_markup=InlineKeyboardMarkup(kb_rows))
+    await q.message.reply_text("1️⃣ Pilih kelas: (🧩 lengkapi · ➕ buat baru · 🔄 backup · 🧪 make-up)", reply_markup=InlineKeyboardMarkup(kb_rows))
     return CLASS
 
 

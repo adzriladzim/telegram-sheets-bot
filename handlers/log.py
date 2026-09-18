@@ -139,7 +139,7 @@ def _build_class_view(classes: list[sheets.ClassEntry], done_by_date: set, show_
         groups.append(("✅ SUDAH DI-LOG", done))
     text_parts = []
     if week or arrears:
-        text_parts.append("1️⃣ Pilih kelas: (✅ = sudah isi untuk jadwal terakhir)")
+        text_parts.append("1️⃣ Pilih kelas: (⭐ kelas sendiri · 🔄 backup · 🧪 make-up · ✅ sudah)")
     else:
         text_parts.append("Tidak ada kelas minggu ini")
     for header, items in groups:

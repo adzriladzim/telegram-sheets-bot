@@ -24,6 +24,7 @@ Bot Telegram untuk fasilitator **Cakrawala University** — mencatat **Zoom Reco
   - [3.7 /cancel — lapor kelas cancel](#37-cancel--lapor-kelas-cancel)
   - [3.8 /schedule — jadwal minggu ini](#38-schedule--jadwal-minggu-ini)
   - [3.9 /cancel & /skip — batal dan lewati](#39-cancel--skip--batal-dan-lewati)
+  - [3.10 Keterangan ikon](#310-keterangan-ikon)
 - [4. Notifikasi Otomatis](#4-notifikasi-otomatis)
 - [5. Bukti Foto / Dokumen](#5-bukti-foto--dokumen)
 - [6. Fitur Pintar (Auto-fill)](#6-fitur-pintar-auto-fill)
@@ -157,7 +158,7 @@ Tap salah satu → `✅ Terdaftar sebagai: Ratu Bilqis`
 
 | Step | Yang bot tanyakan | Cara jawab |
 |------|-------------------|------------|
-| 1️⃣ | Pilih kelas | Tombol daftar kelas kamu (✅ = sudah diisi untuk jadwal terakhir) |
+| 1️⃣ | Pilih kelas | Tombol daftar kelas kamu (⭐ kelas sendiri · 🔄 backup · 🧪 make-up · ✅ sudah) |
 | 2️⃣ | Pertemuan | Tombol `✅ Pakai N` (saran otomatis) / `🔄 Jadi N2` / `✏️ Ketik manual` (contoh: `3` atau `3 dan 4`) |
 | 3️⃣ | Skema kelas | Tombol `🌐 Online` atau `🏫 Offline` |
 | 4️⃣ | Zoom | **Otomatis** dari jadwal (`Zoom 33`), tak perlu ketik |
@@ -169,7 +170,7 @@ Tap salah satu → `✅ Terdaftar sebagai: Ratu Bilqis`
 ```
 /zoom
 ```
-> 1️⃣ Pilih kelas: (✅ = sudah isi untuk jadwal terakhir)
+> 1️⃣ Pilih kelas: (⭐ kelas sendiri · 🔄 backup · 🧪 make-up · ✅ sudah)
 >
 > - Glitch — Pengantar Ilmu Komputer (Senin 13.00 - 15.30)
 > - 3Ilkom — Struktur Data (Selasa 08.00 - 10.30)
@@ -226,7 +227,7 @@ Mencatat kehadiran fasil per kelas ke spreadsheet **Rekap Kehadiran**, termasuk 
 
 | Step | Yang bot tanyakan | Cara jawab |
 |------|-------------------|------------|
-| 1️⃣ | Pilih kelas | Tombol (✅ = lengkap, ⚠️ = baris rumpang yang bisa dilengkapi) |
+| 1️⃣ | Pilih kelas | Tombol (🧩 lengkapi · ➕ buat baru · 🔄 backup · 🧪 make-up) |
 | 2️⃣ | Pertemuan | Auto dari Zoom Record + tombol pilihan / ketik manual |
 | 3️⃣ | Tipe kelas | Tombol `🌐 Online` / `🏫 On-site` |
 | 4️⃣ | Sesi | Tombol `Kelas Biasa` / `Guest Lecture` / `Workshop/E-Lab` / `Lainnya` (atau ketik) |
@@ -245,7 +246,7 @@ Mencatat kehadiran fasil per kelas ke spreadsheet **Rekap Kehadiran**, termasuk 
 ```
 /rekap
 ```
-> 1️⃣ Pilih kelas: (✅ = lengkap, ⚠️ = rumpang/lengkapi)
+> 1️⃣ Pilih kelas: (🧩 lengkapi · ➕ buat baru · 🔄 backup · 🧪 make-up)
 >
 > - ⚠️ 3Ilkom — Struktur Data (Selasa 08.00 - 10.30)
 > - ❌ Batal
@@ -309,7 +310,7 @@ Mencatat kehadiran mahasiswa ke sheet **Absen** (bot mendeteksi blok kelas di **
 ```
 /absen
 ```
-> 1️⃣ Pilih Kode Kelas: (2 hari ini)
+> 1️⃣ Pilih Kode Kelas: (⭐ sendiri · 🔄 backup · 🧪 make-up)
 >
 > — Hari Ini (Selasa) —
 > ⭐ 3Ilkom (hari ini)
@@ -395,7 +396,7 @@ Menampilkan **seluruh jadwal kamu pekan ini** (pribadi + backup) dari sheet Jadw
 ```
 /schedule
 ```
-> 🗓 **Jadwal Kelas Minggu Ini**
+> 🗓 **Jadwal Kelas Minggu Ini** (🔄 backup · 🧪 make-up)
 >
 > **Senin** 13.00 - 15.30
 >   Glitch — Pengantar Ilmu Komputer
@@ -412,6 +413,24 @@ Menampilkan **seluruh jadwal kamu pekan ini** (pribadi + backup) dari sheet Jadw
 - **`/cancel`** — batalkan seluruh form yang sedang berjalan. Semua form juga punya tombol **❌ Batal**.
 - **`/skip`** — lewati step opsional (catatan, bukti, dst).
 - Form **timeout 1 jam** — kalau kamu diam terlalu lama, form tertutup dan bot minta mulai ulang.
+
+### 3.10 Keterangan ikon
+
+Ikon yang muncul di daftar kelas / jadwal:
+
+| Ikon | Arti |
+|------|------|
+| ⭐ | Kelasmu sendiri (jadwal rutin) |
+| 🔄 | Kamu **BACKUP** — megang kelas fasil lain yang lagi izin |
+| 🧪 | **MAKE-UP** — kelas ganti yang dijadwal ulang (tanggal baru) |
+| ✅ | Sudah diisi/catut untuk jadwal terakhir |
+| 🧩 | Rumpang — lengkapi baris rekap |
+| ➕ | Belum ada rekap — buat baru dari Zoom Record |
+| ← | **HARI INI** — jadwal hari ini |
+| 👁 / 🙈 | Tampil / sembunyikan kelas yang sudah di-log |
+| ◀️ | Kembali mundur 1 langkah, isian gak ilang |
+
+Mini-legenda satu baris juga tampil di header picker `/zoom` (`⭐ kelas sendiri · 🔄 backup · 🧪 make-up · ✅ sudah`), `/rekap` (`🧩 lengkapi · ➕ buat baru · 🔄 backup · 🧪 make-up`), `/absen` (`⭐ sendiri · 🔄 backup · 🧪 make-up`), dan header `/schedule` (`🔄 backup · 🧪 make-up`).
 
 ---
 
