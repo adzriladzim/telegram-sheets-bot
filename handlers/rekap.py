@@ -41,6 +41,30 @@ def _first_num(s: str) -> int:
     return int(m.group(0)) if m else 1
 
 
+async def _feedback_sync(context, kode: str, pertemuan_text: str, dosen: str) -> tuple[int, int, Exception | None]:
+    """Naikkan SF/OF -> S/O di absen utk mahasiswa yg sudah isi feedback.
+    '3 dan 4' -> keduanya diproses. Return (n_sf, n_of, err). Fail-open:
+    error konversi TIDAK pernah melempar (caller jaga rekap tetap sukses)."""
+    nums = sorted({int(n) for n in re.findall(r"\d+", pertemuan_text or "") if 1 <= int(n) <= 16})
+    if not nums:
+        return 0, 0, None
+    try:
+        nims = await _sheets(context).feedback_nims(kode, nums, dosen)
+        if not nims:
+            return 0, 0, None
+        n_sf = n_of = 0
+        for pm in nums:
+            changes = await _sheets(context).convert_status(kode, pm, nims)
+            for ch in changes:
+                if ch["dari"] == "SF":
+                    n_sf += 1
+                elif ch["dari"] == "OF":
+                    n_of += 1
+        return n_sf, n_of, None
+    except Exception as exc:  # noqa: BLE001 — fail-open ditangkap caller
+        return 0, 0, exc
+
+
 def _date_key(t: str) -> tuple:
     """'dd/mm/yyyy' -> (y,m,d) for tanggal lama->baru sort; invalid -> last."""
     m = re.match(r"(\d{2})/(\d{2})/(\d{4})", t or "")
@@ -834,6 +858,18 @@ async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         usage.log(update.effective_chat.id, rec.facilitator, "rekap", rec.kode)
         done_msg = f" (update baris {fix_row})" if fix_row else ""
         await q.message.reply_text(f"✅ Rekap tercatat di tab {tab}! {rec.kode} — pertemuan {rec.pertemuan}{done_msg}.\nKirim /rekap untuk entry berikutnya.")
+        # 🔄 Feedback sinkron: mahasiswa yg sudah isi feedback tapi status absen
+        # masih SF/OF -> naik ke S/O. Gagal di sini TIDAK boleh gagalin rekap.
+        try:
+            n_sf, n_of, serr = await _feedback_sync(context, rec.kode, rec.pertemuan, rec.lecturer)
+            if serr:
+                log.warning("feedback sync after rekap %s failed: %s", rec.kode, serr)
+                await q.message.reply_text(f"⚠️ Feedback sinkron gagal: {serr}\nRekap tetap tersimpan — jalankan /sinkron {rec.kode} {rec.pertemuan}.")
+            elif n_sf or n_of:
+                await q.message.reply_text(f"🔄 Feedback sinkron: SF→S {n_sf}, OF→O {n_of} (sheet Absen).")
+        except Exception as exc:  # noqa: BLE001 — jaring pengaman terakhir
+            log.warning("feedback sync post-rekap crashed: %s", exc)
+            await q.message.reply_text(f"⚠️ Feedback sinkron gagal: {exc}\nRekap tetap tersimpan.")
         context.user_data.clear()
         return ConversationHandler.END
 

@@ -44,6 +44,7 @@ async def _post_init(app: Application) -> None:
             BotCommand("backup", "Izin & backup fasil"),
             BotCommand("cancel", "Lapor kelas cancel"),
             BotCommand("absen", "Rekap kehadiran mahasiswa"),
+            BotCommand("sinkron", "Naikkan SF/OF jadi S/O (sudah isi feedback)"),
             BotCommand("stats", "Stats admin"),
             BotCommand("schedule", "Jadwal minggu ini"),
             BotCommand("help", "Bantuan"),

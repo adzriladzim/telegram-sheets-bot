@@ -1487,8 +1487,13 @@ class SheetsClient:
                 return school
         return ""
 
-    def _feedback_counts(self, kode: str, pertemuan: str, dosen: str, prodi_tab: str) -> dict:
-        """Q = distinct NIM with clean match: kode + pertemuan + dosen + prodi + school."""
+    def _feedback_candidates(self, kode: str, nums: set, d_toks: list) -> list[tuple[str, str, str, set]]:
+        """(nim, school, blob, majors) utk tiap baris feedback lulus filter Q —
+        SATU filter dipakai _feedback_counts DAN _feedback_nims (kode blob +
+        pertemuan + dosen; kolom sama: kode r[8:25], pertemuan r[26],
+        dosen r[25], school r[6], majors r[8:25:3]).
+        NIM format hasil probe: mayoritas full 11 digit, kadang short/aneh —
+        dibiarkan raw di sini, matching ke absen dilakukan _nim_match."""
         import time
         now = time.time()
         if _feedback_cache["rows"] is None or now - _feedback_cache["ts"] > 600:
@@ -1497,11 +1502,8 @@ class SheetsClient:
             _feedback_cache["ts"] = now
         rows = _feedback_cache["rows"]
         kc = kode.strip().casefold()
-        nums = set(re.findall(r"\d+", pertemuan or ""))
-        d_toks = self._norm_dosen(dosen)
-        school_exp = self._school_for_prodi(prodi_tab or "").casefold()
-        pn = self._normalize(prodi_tab or "")
-        seen, schools = set(), {}
+        seen = set()
+        out = []
         for r in rows[1:]:
             if len(r) <= 26:
                 continue
@@ -1511,24 +1513,128 @@ class SheetsClient:
             blob = " ".join(c for c in r[8:25]).casefold()
             if kc not in blob:
                 continue
-            aa = re.findall(r"\d+", r[26].strip() if len(r) > 26 else "")
-            if nums and not (set(aa) & nums):
+            aa = {int(n) for n in re.findall(r"\d+", r[26].strip() if len(r) > 26 else "")}
+            if nums and not (aa & nums):
                 continue
             f_toks = self._norm_dosen(r[25] if len(r) > 25 else "")
             if d_toks and f_toks:
                 if not (d_toks[-1] == f_toks[-1] and (d_toks[0] == f_toks[0] or len(d_toks) == 1 or len(f_toks) == 1)):
                     continue
+            seen.add(nim)
+            majors = {c.strip().casefold() for c in r[8:25:3] if c.strip()}
+            out.append((nim, r[6].strip() if len(r) > 6 else "", blob, majors))
+        return out
+
+    def _nim_match(self, absen_nim: str, fb_nim: str) -> bool:
+        """Match NIM absen ke NIM feedback. Hasil probe: keduanya full 11 digit
+        (exact, 97% kasus); pengecualian nyata: feedback short '114' vs absen
+        '...00114' — absen berakhiran fb (leading-zero style 001). Nama/
+        NIM terpotong/13-digit TIDAK match."""
+        a, b = (absen_nim or "").strip(), (fb_nim or "").strip()
+        if not a or not b:
+            return False
+        if a == b:
+            return True
+        if a.isdigit() and b.isdigit() and 3 <= len(b) < len(a) and a.endswith(b):
+            return True  # short-NIM '114' -> '26110100114'
+        return False
+
+    def _feedback_nims(self, kode: str, pertemuan_list: list[int], dosen: str) -> set[str]:
+        """Set NIM feedback lulus filter Q utk pertemuan_list (bisa '3 dan 4')."""
+        nums = {int(p) for p in pertemuan_list if 1 <= int(p) <= 16}
+        return {nim for nim, _, _, _ in self._feedback_candidates(kode, nums, self._norm_dosen(dosen))}
+
+    async def feedback_nims(self, kode: str, pertemuan_list: list[int], dosen: str) -> set[str]:
+        return await self._run(partial(self._feedback_nims, kode, pertemuan_list, dosen))
+
+    def _plan_convert_status(self, kode: str, pertemuan: int, nim_set: set[str]) -> list[dict]:
+        """Baris absen (SEMUA blok kode di 15 tab) yg bakal diubah:
+        sel == 'SF' & NIM di feedback -> 'S'; 'OF' -> 'O'.
+        A/I/kosong/lain JANGAN disentuh. Dry-run: tanpa tulis.
+        Short-NIM feedback ('001') hanya match kalau suffix-nya UNIK di roster
+        (guard over-match: '001' bisa jadi ekor banyak NIM)."""
+        if not 1 <= pertemuan <= 16:
+            raise SheetsError("Pertemuan harus 1-16")
+        blocks = self._locate_absen_block(kode)
+        roster: list[tuple[str, str, str, int]] = []  # (nim, nama, title, row)
+        for title, rows, nim_header in blocks:
+            for r_idx in range(nim_header + 2, len(rows)):
+                if rows[r_idx] and rows[r_idx][0].strip() == "Program Studi":
+                    break
+                nim = rows[r_idx][0].strip() if len(rows[r_idx]) > 0 else ""
+                if not nim:
+                    continue
+                nama = rows[r_idx][1].strip() if len(rows[r_idx]) > 1 else ""
+                roster.append((nim, nama or "-", title, r_idx + 1))
+        # fb NIM yg cocok: exact dulu, lalu short-NIM suffix yg UNIK.
+        roster_nims = [e[0] for e in roster]
+        exact = {n for n in roster_nims} & nim_set
+        match_nims = set(exact)
+        for fb in nim_set:
+            if fb in exact or not (fb.isdigit() and 3 <= len(fb) < 8):
+                continue
+            if sum(1 for n in roster_nims if n.endswith(fb)) == 1:
+                match_nims.add(next(n for n in roster_nims if n.endswith(fb)))
+        col_idx = 3 + (pertemuan - 1)
+        out: list[dict] = []
+        for nim, nama, title, row in roster:
+            if nim not in match_nims:
+                continue
+            # read cell from cached rows (re-fetch block rows utk akses col)
+            cols = self._all_absen_rows()[title]
+            r0 = row - 1
+            if r0 >= len(cols) or len(cols[r0]) <= col_idx:
+                continue
+            val = cols[r0][col_idx].strip().upper()
+            if val not in ("SF", "OF"):
+                continue
+            out.append({"nim": nim, "nama": nama,
+                        "dari": val, "ke": "S" if val == "SF" else "O",
+                        "tab": title, "row": row})
+        return out
+
+    async def plan_convert_status(self, kode: str, pertemuan: int, nim_set: set[str]) -> list[dict]:
+        return await self._run(partial(self._plan_convert_status, kode, pertemuan, nim_set))
+
+    def _convert_status(self, kode: str, pertemuan: int, nim_set: set[str]) -> list[dict]:
+        """Eksekusi _plan_convert_status: SATU values_batch_update utk semua blok,
+        invalidate rows tiap tab + roster. Return daftar perubahan."""
+        plan = self._plan_convert_status(kode, pertemuan, nim_set)
+        if plan:
+            col_letter = chr(ord("A") + 3 + (pertemuan - 1))
+            data = [{"range": f"{_q(ch['tab'])}!{col_letter}{ch['row']}", "values": [[ch["ke"]]]}
+                    for ch in plan]
+            self._ss(self.cfg.absen_sheet_id).values_batch_update(
+                {"valueInputOption": "USER_ENTERED", "data": data})
+            for title in {ch["tab"] for ch in plan}:
+                self._invalidate_rows(self.cfg.absen_sheet_id, title)
+            self._invalidate_absen_students(kode)
+        log.info("Convert absen %s pertemuan %d: %s",
+                 kode, pertemuan, ",".join(f"{ch['nim']}:{ch['dari']}->{ch['ke']}" for ch in plan) or "-")
+        return plan
+
+    async def convert_status(self, kode: str, pertemuan: int, nim_set: set[str]) -> list[dict]:
+        return await self._run(partial(self._convert_status, kode, pertemuan, nim_set))
+
+    def _feedback_counts(self, kode: str, pertemuan: str, dosen: str, prodi_tab: str) -> dict:
+        """Q = distinct NIM with clean match: kode + pertemuan + dosen + prodi + school."""
+        nums = set(int(n) for n in re.findall(r"\d+", pertemuan or ""))
+        school_exp = self._school_for_prodi(prodi_tab or "").casefold()
+        pn = self._normalize(prodi_tab or "")
+        seen, schools = set(), {}
+        for nim, school, blob, majors in self._feedback_candidates(kode, nums, self._norm_dosen(dosen)):
+            if nim in seen:
+                continue
             if pn and not re.search(r"\b" + re.escape(pn) + r"\b", blob):
                 # fallback: match any major cell equality
-                majors = {c.strip().casefold() for c in r[8:25:3] if c.strip()}
                 if pn not in majors and not any(pn in m or m in pn for m in majors):
                     continue
             if school_exp:
-                sch = r[6].strip().casefold() if len(r) > 6 else ""
+                sch = school.casefold()
                 if sch != school_exp:
                     continue
             seen.add(nim)
-            schools[r[6].strip() if len(r) > 6 else ""] = schools.get(r[6].strip() if len(r) > 6 else "", 0) + 1
+            schools[school] = schools.get(school, 0) + 1
         return {"q": len(seen), "schools": schools}
 
     async def feedback_counts(self, kode: str, pertemuan: str, dosen: str, prodi_tab: str) -> dict:

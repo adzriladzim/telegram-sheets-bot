@@ -19,6 +19,7 @@ HELP = (
     "• /register &lt;nama&gt; — daftar nama fasilitator (cukup sekali)\n"
     "• /zoom — simpan record Zoom kelas\n"
     "• /absen — rekap kehadiran mahasiswa (NIM atau nama Zoom: 029_Ahmad Maulana_If)\n"
+    "• /sinkron kode pertemuan — naikkan SF/OF jadi S/O utk yg sudah isi feedback (otomatis setelah /rekap)\n"
     "• /rekap — rekap kehadiran fasil\n"
     "• /backup — izin & backup fasil\n"
     "• /cancel — lapor kelas cancel\n"

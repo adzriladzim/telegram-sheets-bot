@@ -240,6 +240,7 @@ Mencatat kehadiran fasil per kelas ke spreadsheet **Rekap Kehadiran**, termasuk 
 - **Deteksi baris rumpang** — kalau tanggal kelas ini sudah ada baris tapi belum lengkap (mis. bukti kosong), bot tawarkan `🧩 Lengkapi baris ini` supaya tidak dobel.
 - **Auto-count** — total/hadir/feedback dihitung dari sheet Absen + Feedback; kalau absen belum ada, kolom jumlah dikosongkan dengan catatan.
 - **Bukti lama bisa dilengkapi** tanpa upload ulang — cukup lanjut isi kolom yang kurang.
+- **Feedback sinkron 🔄** — setelah rekap sukses, mahasiswa yang sudah isi feedback form tapi status absennya masih `SF`/`OF` otomatis dinaikkan jadi `S`/`O` di sheet Absen. Bisa juga manual kapan saja via `/sinkron <kode> <pertemuan>`.
 
 **Contoh:**
 
@@ -510,6 +511,7 @@ Supaya fasil tidak perlu ketik apa-apa, bot mengisi banyak kolom otomatis dari s
 | **Ceklis ✅** | Kelas yang sudah diisi untuk jadwal terakhir ditandai ✅ di daftar `/zoom` dan `/rekap` |
 | **Baris kosong pertama** | Bot menulis ke baris kosong pertama — tidak pernah menimpa data orang lain |
 | **Auto-count rekap** | Total/Hadir/Feedback dihitung dari Absen + Feedback |
+| **Feedback sinkron** | Setelah rekap sukses, mahasiswa berstatus `SF`/`OF` yang sudah isi feedback dinaikkan ke `S`/`O`; manual via `/sinkron <kode> <pertemuan>` (preview + konfirmasi) |
 | **Mode darurat** | Admin bisa set semua kelas Reguler jadi Online lewat `/darurat` |
 
 ---
