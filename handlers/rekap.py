@@ -165,6 +165,9 @@ async def pick_zoom(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     e = item["entry"]
     context.user_data["zoom_entry"] = e
     c = _class_from_zoom(e)
+    # Kolom D Rekap = RENTANG PENUH dari jadwal (Zoom M cuma jam mulai) —
+    # resolve by kode, fallback start-only utk kode lama.
+    c.time_range = await _resolve_jam_range(context, e)
     context.user_data["cls"] = c
     context.user_data["zoom_tanggal"] = e["tanggal"]
     await q.message.edit_text(
@@ -280,6 +283,33 @@ def _class_from_zoom(e: dict) -> sheets.ClassEntry:
         category="", lecturer=e["dosen"], room="", rombel="", sks=e["sks"],
         zoom_number=e["zoom"], zoom_link="", keterangan="", semester="",
     )
+
+
+async def _resolve_jam_range(context, e: dict) -> str:
+    """Jam RENTANG PENUH ("18.30 - 20.00") buat kolom D RekapRecord.
+
+    Konvensi sheet Rekap = range penuh, tapi Zoom Record col M cuma jam mulai.
+    Cari kelas asli by kode (personal/backup/makeup; backup/makeup time_range
+    udah eksplisit dari sheetnya) — match normalize kode. Reuse user_data
+    'classes' kalau udah ada (manual path fetch sekali), else fetch sekali &
+    simpan. Fallback: entri Zoom M (start-only) kalau kode lama gak ketemu."""
+    fac = context.user_data.get("facilitator", "")
+    classes = context.user_data.get("classes")
+    if classes is None:
+        try:
+            personal, backup, makeup = await _sheets(context).get_all_loggable_classes(fac)
+            classes = list(personal) + list(backup) + list(makeup)
+            context.user_data["classes"] = classes
+        except Exception:
+            classes = []
+    kode = (e.get("kode") or "").strip().casefold()
+    for c in classes:
+        if (c.code or "").strip().casefold() == kode:
+            full = (c.time_range or "").strip()
+            if full:
+                return full
+            break
+    return (e.get("mulai") or "").strip()
 
 
 def _tanggal_keys(context, c) -> list:

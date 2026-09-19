@@ -48,11 +48,12 @@ def cfg_fixture():
 class FakeClient(sheets.SheetsClient):
     """Async stubs — no gspread I/O. Rows: Zoom Record B..O (idx 1..14)."""
 
-    def __init__(self, zoom_rows, done_set, status_map):
+    def __init__(self, zoom_rows, done_set, status_map, class_fixtures=None):
         super().__init__(cfg_fixture())
         self._zoom_rows = zoom_rows
         self._done = done_set
         self._status = status_map
+        self._class_fixtures = class_fixtures or []
 
     async def zoom_entries(self, name):
         return await self._run(lambda: self._zoom_entries_fake(name))
@@ -89,6 +90,10 @@ class FakeClient(sheets.SheetsClient):
 
     async def rekap_row_status(self, tab, kode, tanggal_list):
         return self._status.get(kode, {"state": "none"})
+
+    async def get_all_loggable_classes(self, facilitator_name):
+        # (personal, backup, makeup) — fixture kelas jadwal utk resolve jam RENTANG PENUH
+        return (list(self._class_fixtures), [], [])
 
 
 def fake_context(client):
@@ -222,6 +227,36 @@ check("class_from_zoom: kode/matkul/sks/dosen/jam terisi",
 check("tipe dari scheme: Offline->On-site",
       rekap._zoom_tipe("Offline") == "On-site" and rekap._zoom_tipe("Online") == "Online",
       f"got {rekap._zoom_tipe('Offline')}")
+
+# 5b. prefill jam = RENTANG PENUH (bukan jam mulai Zoom M)
+MASTER_ARCH1 = sheets.ClassEntry(
+    code="ARCH1", subject="Arsitektur", day="Senin", time_range="14.00 - 16.30",
+    category="Reguler", lecturer="Budi", room="", rombel="", sks="2",
+    zoom_number="2", zoom_link="", keterangan="",
+)
+c_full = FakeClient(ZOOM_ROWS, DONE, STATUS, class_fixtures=[MASTER_ARCH1])
+fctx = fake_context(c_full)
+fctx.user_data["facilitator"] = "Ratu Bilqis"
+fctx.user_data["rekap_tab"] = "Ratu"
+jam_full = _run(lambda: rekap._resolve_jam_range(fctx, e))
+check("jam range penuh: ARCH1 dari jadwal master '14.00 - 16.30' di-pakai, bukan '14.00'",
+      jam_full == "14.00 - 16.30", f"got {jam_full!r}")
+c_legacy = FakeClient(ZOOM_ROWS, DONE, STATUS, class_fixtures=[MASTER_ARCH1])
+lctx = fake_context(c_legacy)
+lctx.user_data["facilitator"] = "Ratu Bilqis"
+legacy_e = dict(e, kode="LAMA99", mulai="09.00")
+jam_legacy = _run(lambda: rekap._resolve_jam_range(lctx, legacy_e))
+check("fallback kode lama: kelas gak ketemu -> Zoom M start-only",
+      jam_legacy == "09.00", f"got {jam_legacy!r}")
+# prefill utk ➕ baru: cls dari zoom dgn time_range resolved -> rec.jam range penuh
+bctx2 = fake_context(c_full)
+bctx2.user_data.update({"facilitator": "Ratu", "meeting": "3 dan 4", "tipe": "On-site",
+                        "zoom_tanggal": "08/09/2026"})
+cls2 = rekap._class_from_zoom(e)
+cls2.time_range = _run(lambda: rekap._resolve_jam_range(bctx2, e))
+rec2 = rekap._build_base(bctx2, cls2, rekap._tanggal_kelas(bctx2, cls2))
+check("build_base: jam rec = range penuh jadwal",
+      rec2.jam == "14.00 - 16.30", f"got {rec2.jam!r}")
 
 # 6. jalur manual: _tanggal_keys fallback (zoom_tanggal TIADA -> kelas)
 mctx = fake_context(FakeClient([], set(), {}))
