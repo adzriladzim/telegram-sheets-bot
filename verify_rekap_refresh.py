@@ -236,5 +236,21 @@ check("handler: indeks kedaluwarsa -> pesan + state ZOOM",
       state8 == rekap.ZOOM and any("kedaluwarsa" in t for t in q8.message.replies),
       f"got replies={q8.message.replies}")
 
+# ---------- 6. regresi 2f5e00c: /rekap saat conv masih aktif di ZOOM ----------
+class _App:
+    def __init__(self):
+        self.handlers = []
+
+    def add_handler(self, handler, *a, **k):
+        self.handlers.append(handler)
+
+
+_app = _App()
+rekap.register(_app, cfg_fixture())
+_conv = next((h for h in _app.handlers if getattr(h, "name", "") == "rekap_conv"), None)
+check("conv: rekap_conv terdaftar", _conv is not None)
+check("conv: allow_reentry=True (fix /rekap diam setelah 🔃 rzkr)",
+      getattr(_conv, "allow_reentry", False) is True, f"got {getattr(_conv, 'allow_reentry', None)}")
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

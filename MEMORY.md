@@ -1,7 +1,7 @@
 # MEMORY — telegram-sheets-bot (TelefasilBot)
 
 > Per-project memory. Read at cold session start. Append-only.
-> Updated: 2026-09-19 (HEAD 873d961 — legenda ikon HELP + mini-legenda picker + README 3.10)
+> Updated: 2026-09-20 (redesign visual kelengkapan minggu ini stats; next: deploy → ACTIVE → tes /stats)
 
 ## What
 Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, rekap kehadiran, backup, cancel kelas langsung ke Google Sheets. Multi-user (satu bot, tiap fasil lihat jadwal sendiri). Bot: [@telefasil_bot](https://t.me/telefasil_bot).
@@ -391,8 +391,8 @@ Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, 
 - **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE; (2) tes live: akun fasil lain /stats → ⛔ + log denied; admin → sukses + log served; (3) cek Railway log utk baris `stats denied`/`stats served`.
 - **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent.
 
-## [2026-09-19] FIX header pengisi absen: nh+3, bukan nh+1 — probe live
-> **SHIPPED:** commit ini. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE = commit ini, lalu tes /absen: nama pengisi mendarat di baris NAMA (di bawah nomor sesi), bukan menimpa angka 1..16.**
+## [2026-09-19] FIX header pengisi absen: nh+3, bukan nh+1 — probe live (commit = 6452a28)
+> **SHIPPED:** commit `6452a28`. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE = 6452a28, lalu tes /absen: nama pengisi mendarat di baris NAMA (di bawah nomor sesi), bukan menimpa angka 1..16.**
 
 - **LAPORAN USER:** FDrw3 sesi 1 di-log — nama pengisi muncul nyempil di deretan ANKA pertemuan, header kolom sesi 1 tak berubah (screenshot).
 - **PROBE LIVE READ-ONLY (`verify_pengisi_probe.py`, untracked):** dump FDrw3 (VCD tab) + scan seluruh absen utk nama "Adzril Adzim Hendrynov" & "Muhammad Rayhan F".
@@ -404,3 +404,92 @@ Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, 
 - **VERIFIKASI:** `verify_absen_header.py` fixture di-update ke geometri nyata (baris angka + baris nama) → **16/16 PASS** (header = `'Ilkom'!D5/D12`, `'Manajemen'!D4`, `G5` utk pertemuan 4; angka tak disentuh). compileall OK. verify_725423d.py STALE pre-existing (kwarg `reminder_hour` dihapus — bukan regresi).
 - **NEXT (user):** Railway → Deploy Latest Commit; tes /absen → nama pengisi di baris nama, angka 1..16 tetap utuh.
 - **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent.
+
+## [2026-09-19] Rekap jam range penuh FIX pushed a20817e (6452a28..a20817e)
+> **SHIPPED:** commit `a20817e` pushed `6452a28..a20817e`. HEAD = a20817e. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE = a20817e, lalu tes /rekap (jam range penuh).**
+
+- **Isi — `_resolve_jam_range` (`handlers/rekap.py` L288):**
+  - Konvensi sheet Rekap = jam RENTANG PENUH ("18.30 - 20.00"), tapi Zoom Record col M cuma jam mulai → prefill rekap dulu cuma start-only, kolom D Rekap jadi terpotong.
+  - **Priority fix:** cari kelas asli by kode (normalize casefold) di personal/backup/makeup (`get_all_loggable_classes`) — time_range backup/makeup udah EKSPLISIT dari sheetnya → pakai itu; kalau ada → return range penuh. Reuse+cache `user_data['classes']` (manual path fetch sekali, kalau None fetch & simpan). **Fallback:** entri Zoom M (start-only) kalau kode lama tak ketemu di kelas.
+  - Efek: prefill ➕ baru + path fix /rekap sekarang tulis jam range penuh, bukan jam mulai.
+- **KEPUTUSAN USER:** production **rows 188-193 rekap lama** (jam masih start-only, korup dari bug lama) **TIDAK ditambal via bot** — user putuskan perbaikan manual/bot terpisah. Data korup existing dibiarkan di sheet.
+- **VERIFIKASI:** stub `verify_zoom_picker.py` **19/19 PASS** (termasuk kasus `_resolve_jam_range`: match kelas → range penuh, legacy → start-only) + compileall OK.
+- **Skew/deploy note:** `6452a28` = FIX header pengisi absen nh+3 (entri atas — hash kini tercatat). **`6452a28` BELUM PASTI ke-deploy** → a20817e juga belum; verifikasi ACTIVE via Railway.
+- **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE jadi **a20817e**; (2) tes `/absen` → nama pengisi di baris bawah angka (header nh+3); (3) tes `/rekap` → kolom jam = range penuh (bukan start-only).
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-19] Repair satu-kali rekap jam production 3516180 DONE — 6 sel start-only → range penuh
+> Commit `3516180` (tool `repair_rekap_jam.py`). Lanjutan a20817e (fix kode) — repair DATA existing.
+
+- **LAPORAN USER:** rows 188-193 (screenshot offset tampil = BARIS AKTUAL 14-19) tab **Adzril Adzim** kolom D masih start-only → ditambal SATU-KALI via tool, bukan via bot.
+- **REPAIR (6 sel):** InVC6 `18-20`, FDrw3 `20-22`, PR02 `12-14.30`, Jour2 `15.30-18`, Jour3 `20-22`, DtAn1 `08.30-11`.
+- **VERIFIKASI LIVE RE-READ:** 0 kandidat start-only tersisa (tool scan ulang bersih).
+- **TOOL `repair_rekap_jam.py`** (committed `3516180`): runbook `--selftest` (kering, tanpa tulis) / `--write` (tulis range penuh); reusable utk repair batch serupa.
+- **CATATAN OFFSET:** screenshot row 188-193 = tampilan spreadsheet; aktual baris 14-19. Jangan percaya angka baris dari screenshot langsung.
+- **SISA:** deploy `a20817e` (fix kode) + `3516180` (tool, bukan runtime) → **ACTIVE di Railway** → tes /rekap baru tulis range penuh.
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-19] Sweep ALL-TABS rekap 0 start-only + fix latent _find_rekap_tab trailing-space — 86edf31
+> **SHIPPED:** commit `86edf31`. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE = 86edf31 (membawa 6452a28 pengisi nh+3, a20817e jam penuh, 3516180 tool, 86edf31 tab fix).**
+
+- **Sweep SEMUA tab rekap via tool `repair_rekap_jam.py --all-tabs`** — 0 sel start-only tersisa (verifikasi re-read bersih). **1 SKIP:** Ratu r21 IAcc2 — kode tak unik (ambigu di master) → perbaikan MANUAL (tool lapor, tak tulis).
+  - Mode baru tool: `--all-tabs` (SEMUA tab rekap, skip `_SYSTEM_TABS`) — tab→nama via `data/users.json` + `_find_rekap_tab`; nama tak ketemu → fallback resolve by KODE scan master (time_range penuh; unik → pakai, ambigu → SKIP & lapor). Cap global 200 sel.
+- **FIX latent `_find_rekap_tab` (sheets.py L1276):** nama fasil dengan trailing-space (probe names `"Anisa"`, `"Anisa "`, `"Yodha Adytia Choirullah"`) — tab rekap "Anisa " dkk KINI resolve: `_find_rekap_tab` return **RAW title** (normalize hanya utk compare), worksheet() resolve title raw + cache key konsisten. Sebelumnya: miss → `SheetsError "Tab rekap ... tidak ketemu"`.
+- **VERIFIKASI:** probe live `probe_find_rekap_tab.py` (read-only, tanpa creds write) OK — raw title resolve; stub regresi PASS (verify_rekap_border.py + verify_zoom_picker.py regresi bersih).
+- **NEXT (user):** Railway → **Deploy Latest Commit** → cek ACTIVE jadi **86edf31**; tes `/rekap` jam range penuh + tab fasil trailing-space resolve (Anisa/Yodha/Dzika).
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-19] Sinkron Feedback SF→S/OF→O SHIPPED 235d3fc (86edf31..235d3fc)
+> **SHIPPED:** commit `235d3fc` pushed `86edf31..235d3fc`. HEAD = 235d3fc. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE = 235d3fc, lalu tes /rekap (SF ke-S) + /sinkron live.**
+
+- **Sinkron Feedback (SF→S / OF→O) — sheets + rekap:**
+  - sheets.py: `feedback_nims` + `_plan_convert_status` / `_convert_status` — shared filter dgn `_feedback_counts`; guard **NIM exact / short-suffix unik** (short-suffix ambigu → tak dipakai diam-diam).
+  - Flow: feedback SF/OF → status **S/O** sebelum tulis/cek rekap.
+- **Rekap confirm AUTO-SYNC** — feedback di-sinkron otomatis saat confirm rekap; **fail-open** (gagal sync tak blok aksi utama); reply **🔄** saat proses sync.
+- **Command `/sinkron <kode> [pertemuan]`** — **preview** rencana konversi + tombol **✅/❌** konfirmasi; registered user only; **timeout 10 menit** (state kedaluwarsa → pesan expired).
+- **PROBE LIVE:** NIM **11-digit exact DOMINAN** (format utama di feedback) — guard exact dulu, short-suffix fallback utk yg konsisten unik.
+- **VERIFIKASI:** stub **24/24 PASS** (offline, tanpa creds). compileall OK.
+- **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE jadi **235d3fc**; (2) tes `/rekap` → feedback SF ke-S otomatis; (3) tes `/sinkron` manual → preview + ✅/❌.
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-20] Fix /rekap stuck diam allow_reentry (pemicu 2f5e00c) — hash belum tercatat
+> **SHIPPED.** **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE, lalu tes /rekap: user yang pernah stuck di alur rekap kini bisa /rekap lagi.**
+
+- **SYMPTOM:** `/rekap` STUCK DIAM (bot tak balas) utk user tertentu setelah commit `2f5e00c` (🔃 refresh). ConversationHandler user tertinggal (stuck) di state **ZOOM return** — state `ZOOM` lama mem-return handler ZOOM menunggu input tak pernah datang.
+- **ROOT CAUSE:** `rekap.py:265` — endpoint rekap ZOOM mem-return ConversationHandler ZOOM yang **`allow_reentry` default False** → saat user stuck di state ZOOM, `/rekap` baru DROP SILENT (PTB ConversationHandler tolak re-entry tanpa pesan). Bukan deadlock `_run`/gspread — state-level PTB.
+- **FIX:** `rekap.py:989` — ConversationHandler `/rekap` diberi **`allow_reentry=True`** → user yang stuck di alur lain tetap bisa masuk `/rekap` baru.
+- **VERIFIKASI:** stub `verify_rekap_refresh.py` **16/16 PASS** (naik dari 14 — kasus re-entry). compileall OK.
+- **REVIEW:** **APPROVED** — 2 nit S4 non-blocking: (1) cache clear (invalidate rows setelah refresh), (2) int parse (guard pertemuan parse) — dicatat, bukan gate.
+- **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE; (2) tes live: user yang tadi stuck kirim `/rekap` → harus balas normal.
+- **PELAJARAN (konvensi):** setiap ConversationHandler dengan entry point yang bisa dipanggil ulang → set `allow_reentry=True`. State stuck user = silent drop kalau default False.
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-20] Redesign visual kelengkapan minggu ini stats — format-only (hash belum tercatat)
+> **SHIPPED.** **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE, lalu tes /stats: blok "Kelengkapan minggu ini" tampil rapi.**
+> **Detail:** `handlers/stats.py` L387-399 — blok matriks "Kelengkapan minggu ini".
+
+- **ISI — FORMAT-ONLY:** redesign tampilan blok kelengkapan minggu ini. **Nol logika hitung berubah; kode full tetap; hanya layout/styling baris diubah.**
+- **Format baru:**
+  - Per nama: baris **`<b>▸ {nama}</b>`** (bold, penanda ▸).
+  - **2 baris `<pre>` monospace**:
+    - `log   {●●○…} {ld}/{t}` — status per pertemuan (● terisi, ○ mendatang, ✗ lewat) + count done/total.
+    - `rekap {●●○…} {rd}/{t}` — sama utk rekap.
+  - Baris kode kelas: join **koma+spasi**.
+- **Keamanan:** semua nama + kode dari sheet lewat **`html.escape`** → aman dari injection HTML/telegram formatting.
+- **VERIFIKASI:** tes/stub **33 PASS** (offline, tanpa creds). compileall OK.
+- **REVIEW:** **APPROVED** — 1 nit S4 count saja (non-blocking; catatan soal tampilan count, bukan gate).
+- **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE; (2) tes `/stats` → blok kelengkapan tampil `<pre>` monospace + ●/○/✗ + counts.
+- **PELAJARAN:** perubahan visual kecil = FORMAT-ONLY diff kalau logika hitung sudah benar — minimalkan risiko regresi.
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-19] 🔃 refresh angka O–S SHIPPED 2f5e00c (235d3fc..2f5e00c)
+> **SHIPPED:** commit `2f5e00c` pushed `235d3fc..2f5e00c`. HEAD = 2f5e00c. **Railway deploy MANUAL (auto-deploy off) — klik Deploy Latest Commit → ACTIVE = 2f5e00c, lalu tes 🔃 di /rekap.**
+
+- **Picker rekap — entri lengkap kini kind `refresh` + tombol 🔃** (`rzkr:{i}`), bukan skip diam-diam:
+  - Grup terpisah di bawah ➕/🧩, label "🔃 {dd/mm} {kode} p.{pertemuan}", separator "— 🔃 sudah lengkap (update angka?) —". Klasifikasi 3 status lengkap/rumpang/belum → refresh/fix/new (verify_zoom_picker konsisten).
+  - Handler `rekap.pick_zoom_refresh` — user refresh baris rekap lengkap dengan angka feedback terbaru.
+- **Diff-only write O–S:** hanya sel kolom O–S yang nilainya berubah yang ditulis (banding lama vs baru dari feedback; `changed` count). **B–L aman** — kolom B–L tak disentuh. **0-diff → no-op** (tak ada perubahan → tak ada write). **Fail-open** — SheetsError saat refresh tak blok aksi utama (reply diff/no-change path).
+- **Usage log** aksi `rekap-refresh` + kode.
+- **VERIFIKASI:** stub baru `verify_rekap_refresh.py` **14/14 PASS** (refresh_os diff, picker refresh kind+tombol 🔃+separator, handler reply diff/no-change/fail-open, usage) + regresi `verify_zoom_picker.py` PASS + compileall OK.
+- **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE jadi **2f5e00c**; (2) tes /rekap: entri lengkap muncul grup 🔃 → tap → angka O–S ter-update dari feedback.
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent. Cavemem MCP down — append manual.

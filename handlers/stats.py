@@ -386,11 +386,17 @@ def _build_detail(names: list[str], data: list[dict], pdata: list[dict], days: i
               "• " + ", ".join(html.escape(n) for n in never)]
     if matriks:
         L += ["", "<b>Kelengkapan minggu ini</b>",
-              "<i>✓ terisi · ✗ lewat belum · ○ jadwal mendatang</i>"]
+              "<i>● terisi · ○ mendatang · ✗ lewat</i>"]
         for name, row in matriks:
-            codes = ",".join(html.escape(r[0]) for r in row)
-            L.append(f"• {html.escape(name)} — {codes}")
-            L.append(f"   log {' '.join(r[1] for r in row)} | rekap {' '.join(r[2] for r in row)}")
+            log_m = [r[1].replace("✓", "●") for r in row]
+            rekap_m = [r[2].replace("✓", "●") for r in row]
+            ld = sum(1 for m in log_m if m == "●")
+            rd = sum(1 for m in rekap_m if m == "●")
+            t = len(row)
+            L.append(f"<b>▸ {html.escape(name)}</b>")
+            L.append(f"<pre>log   {''.join(log_m)} {ld}/{t}\n"
+                     f"rekap {''.join(rekap_m)} {rd}/{t}</pre>")
+            L.append(", ".join(html.escape(r[0]) for r in row))
     if arrears:
         L += ["", f"<b>Tunggakan per fasil</b> ({len(arrears)})"]
         by_name: dict = defaultdict(list)
