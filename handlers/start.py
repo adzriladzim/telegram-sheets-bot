@@ -32,6 +32,7 @@ HELP = (
     "✅ sudah diisi/catut untuk jadwal terakhir\n"
     "🧩 rumpang — lengkapi baris rekap\n"
     "➕ belum ada rekap — buat baru dari Zoom Record\n"
+    "🔃 sudah lengkap — hitung ulang angka O–S (total/hadir/feedback) dari Absen + Feedback terbaru\n"
     "← HARI INI jadwal hari ini\n"
     "👁/🙈 tampil/sembunyi yang sudah di-log\n"
     "◀️ Kembali mundur 1 langkah, isian gak ilang\n\n"

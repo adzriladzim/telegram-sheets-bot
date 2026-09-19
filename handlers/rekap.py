@@ -110,14 +110,17 @@ async def cmd_rekap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         ])
         await update.effective_message.reply_text("✅ Semua rekap dari Zoom Record sudah lengkap.", reply_markup=kb)
         return ZOOM
-    context.user_data["zoom_items"] = items
+    work = [it for it in items if it["kind"] != "refresh"]
+    refresh = [it for it in items if it["kind"] == "refresh"]
+    context.user_data["zoom_items"] = work
+    context.user_data["zoom_refresh"] = refresh
     context.user_data["zoom_page"] = 0
     await _render_zoom_picker(update.effective_message, context)
     return ZOOM
 
 
 async def _classify_zoom_entries(context, tab: str, entries: list[dict]) -> list[dict]:
-    """Klasifikasi tiap entri Zoom: lengkap -> skip; rumpang -> fix; belum ada -> new.
+    """Klasifikasi tiap entri Zoom: lengkap -> refresh; rumpang -> fix; belum ada -> new.
     Reuse _get_rekap_done / rekap_row_status via async API."""
     s = _sheets(context)
     try:
@@ -134,7 +137,8 @@ async def _classify_zoom_entries(context, tab: str, entries: list[dict]) -> list
             except Exception:
                 st = {"state": "none"}
             if st.get("state") == "complete":
-                continue  # lengkap -> skip
+                items.append({"kind": "refresh", "entry": e, "row": st.get("row")})
+                continue
             if st.get("state") == "incomplete":
                 items.append({"kind": "fix", "entry": e, "row": st["row"], "gaps": st["gaps"]})
                 continue
@@ -143,8 +147,9 @@ async def _classify_zoom_entries(context, tab: str, entries: list[dict]) -> list
     return items
 
 
-def _zoom_kb(items: list[dict], page: int) -> list[list[InlineKeyboardButton]]:
+def _zoom_kb(items: list[dict], page: int, refresh: list[dict] | None = None) -> list[list[InlineKeyboardButton]]:
     kb = []
+    refresh = refresh or []
     start = page * _ZOOM_PAGE
     for i in range(start, min(start + _ZOOM_PAGE, len(items))):
         e = items[i]["entry"]
@@ -159,6 +164,10 @@ def _zoom_kb(items: list[dict], page: int) -> list[list[InlineKeyboardButton]]:
         nav.append(InlineKeyboardButton("Next ›", callback_data="rzkp:next"))
     if nav:
         kb.append(nav)
+    for i, it in enumerate(refresh):
+        e = it["entry"]
+        ddmm = e["tanggal"][:5] if e["tanggal"] else "??/??"
+        kb.append([InlineKeyboardButton(f"🔃 {ddmm} {e['kode']} p.{e['pertemuan']}", callback_data=f"rzkr:{i}")])
     kb.append([
         InlineKeyboardButton("➕ Buat entri lain (di luar daftar)", callback_data="rzk:manual"),
         InlineKeyboardButton("❌ Batal", callback_data="rzk:cancel"),
@@ -168,13 +177,17 @@ def _zoom_kb(items: list[dict], page: int) -> list[list[InlineKeyboardButton]]:
 
 async def _render_zoom_picker(msg, context) -> None:
     items = context.user_data.get("zoom_items") or []
+    refresh = context.user_data.get("zoom_refresh") or []
     page = context.user_data.get("zoom_page", 0)
     total = max(len(items), 1)
     pages = (total + _ZOOM_PAGE - 1) // _ZOOM_PAGE
-    await msg.reply_text(
+    text = (
         f"1️⃣ Rekap yang perlu diisi (dari Zoom Record):\n"
-        f"({len(items)} entri, hal {page + 1}/{pages})",
-        reply_markup=InlineKeyboardMarkup(_zoom_kb(items, page)))
+        f"({len(items)} entri, hal {page + 1}/{pages})"
+    )
+    if refresh:
+        text += "\n\n— 🔃 sudah lengkap (update angka?) —"
+    await msg.reply_text(text, reply_markup=InlineKeyboardMarkup(_zoom_kb(items, page, refresh)))
 
 
 async def pick_zoom(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -216,19 +229,59 @@ async def pick_zoom(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return SESI
 
 
+async def pick_zoom_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """🔃 hitung ulang O..S baris rekap yang SUDAH lengkap — dari Absen+Feedback
+    terbaru. B..L (termasuk bukti) tidak disentuh. Fail-open: SheetsError →
+    pesan ⚠️, picker tetap hidup."""
+    q = update.callback_query
+    await q.answer()
+    idx = int(q.data.split(":")[1])
+    refresh = context.user_data.get("zoom_refresh") or []
+    if not 0 <= idx < len(refresh):
+        await q.message.reply_text("Pilihan kedaluwarsa — kirim /rekap lagi.")
+        return ZOOM
+    item = refresh[idx]
+    e = item["entry"]
+    tab = context.user_data.get("rekap_tab", "")
+    busy = await q.message.reply_text("⏳ Hitung ulang angka (O–S) dari Absen + Feedback terbaru...")
+    try:
+        s = _sheets(context)
+        async with s.for_chat(update.effective_chat.id):
+            changed, before, after = await s.refresh_os(
+                s.cfg.rekap_sheet_id, tab, item["row"], e["kode"], e["pertemuan"], e["dosen"])
+    except sheets.SheetsError as exc:
+        try: await busy.delete()
+        except Exception: pass
+        await q.message.reply_text(f"⚠️ Gagal hitung ulang: {exc}\nBaris rekap tidak diubah — coba lagi nanti.")
+        return ZOOM
+    try: await busy.delete()
+    except Exception: pass
+    if changed:
+        parts = [f"{col} {old}→{new}" for col, (old, new) in changed.items()]
+        usage.log(update.effective_chat.id, context.user_data.get("facilitator", ""), "rekap-refresh", e["kode"])
+        await q.message.reply_text(f"🔃 {html.escape(e['kode'])} p.{html.escape(e['pertemuan'])}: {', '.join(parts)}")
+    else:
+        await q.message.reply_text("✅ Angka masih akurat — belum ada perubahan")
+    return ZOOM
+
+
 async def zoom_page(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
     items = context.user_data.get("zoom_items") or []
+    refresh = context.user_data.get("zoom_refresh") or []
     page = context.user_data.get("zoom_page", 0)
     pages = max((len(items) + _ZOOM_PAGE - 1) // _ZOOM_PAGE, 1)
     page = max(0, min(pages - 1, page + (1 if q.data.endswith(":next") else -1)))
     context.user_data["zoom_page"] = page
+    text = (
+        f"1️⃣ Rekap yang perlu diisi (dari Zoom Record):\n"
+        f"({len(items)} entri, hal {page + 1}/{pages})"
+    )
+    if refresh:
+        text += "\n\n— 🔃 sudah lengkap (update angka?) —"
     try:
-        await q.message.edit_text(
-            f"1️⃣ Rekap yang perlu diisi (dari Zoom Record):\n"
-            f"({len(items)} entri, hal {page + 1}/{pages})",
-            reply_markup=InlineKeyboardMarkup(_zoom_kb(items, page)))
+        await q.message.edit_text(text, reply_markup=InlineKeyboardMarkup(_zoom_kb(items, page, refresh)))
     except Exception:
         await _render_zoom_picker(q.message, context)
     return ZOOM
@@ -917,6 +970,7 @@ def register(app: Application, cfg: Config) -> None:
                       CallbackQueryHandler(cmd_rekap, pattern=r"^go:rekap$")],
         states={
             ZOOM: [CallbackQueryHandler(pick_zoom, pattern=r"^rzk:\d+$"),
+                   CallbackQueryHandler(pick_zoom_refresh, pattern=r"^rzkr:\d+$"),
                    CallbackQueryHandler(zoom_page, pattern=r"^rzkp:(prev|next)$"),
                    CallbackQueryHandler(zoom_manual, pattern=r"^rzk:manual$"),
                    CallbackQueryHandler(back_rk_cancel, pattern=r"^rzk:cancel$")],

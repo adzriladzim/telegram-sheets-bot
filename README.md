@@ -241,6 +241,8 @@ Mencatat kehadiran fasil per kelas ke spreadsheet **Rekap Kehadiran**, termasuk 
 - **Auto-count** — total/hadir/feedback dihitung dari sheet Absen + Feedback; kalau absen belum ada, kolom jumlah dikosongkan dengan catatan.
 - **Bukti lama bisa dilengkapi** tanpa upload ulang — cukup lanjut isi kolom yang kurang.
 - **Feedback sinkron 🔄** — setelah rekap sukses, mahasiswa yang sudah isi feedback form tapi status absennya masih `SF`/`OF` otomatis dinaikkan jadi `S`/`O` di sheet Absen. Bisa juga manual kapan saja via `/sinkron <kode> <pertemuan>`.
+- **Hitung ulang angka 🔃** — rekap yang sudah lengkap tetap muncul di daftar `/rekap` (grup `— 🔃 sudah lengkap (update angka?) —`); tap `🔃` menghitung ulang kolom O–S (total/hadir/feedback/belum) dari Absen + Feedback terbaru. Kolom B–L, termasuk gambar bukti manual, tidak pernah disentuh.
+- **Diff-only + no-op** — 🔃 hanya menulis sel yang angkanya berubah (`O 30→32, Q 18→24`); kalau semua angka masih akurat, bot balas `✅ Angka masih akurat — belum ada perubahan`. Kalau Sheets gagal, picker tetap hidup dengan pesan ⚠️.
 
 **Contoh:**
 

@@ -2,11 +2,12 @@
 
 Checks:
   1. zoom_entries parsing + col C match (fasil normalize), skip kosong
-  2. klasifikasi 3 status: lengkap->skip, rumpang->fix(row+gaps), belum->new
+  2. klasifikasi: lengkap->refresh(row), rumpang->fix(row+gaps), belum->new
   3. urut tanggal lama->baru
   4. paginasi 25/halaman + tombol Prev/Next
   5. prefill zoom->record: kode/matkul/sks/pertemuan '3 dan 4'/tipe Online->Online Offline->On-site
   6. jalur manual tetap: class_kb dibangun, _tanggal_keys fallback ke kelas
+  7. grup 🔃 lengkap: tombol rzkr:i + separator di _render_zoom_picker
 Run: py verify_zoom_picker.py
 """
 from __future__ import annotations
@@ -123,7 +124,7 @@ ZOOM_ROWS = [
 # done rekap: CS301 sudah ada (06/09/2026 -> complete), ARCH1 ada (08/09/2026 -> incomplete)
 DONE = {("cs301", "06/09/2026"), ("arch1", "08/09/2026")}
 STATUS = {
-    "CS301": {"state": "complete", "count": 1},
+    "CS301": {"state": "complete", "count": 1, "row": 5},
     "ARCH1": {"state": "incomplete", "row": 7, "gaps": ["Bukti"]},
 }
 
@@ -150,12 +151,15 @@ check("zoom_entries: tanggal panjang dinormalkan + pertemuan '3 dan 4'",
       and a1["scheme"] == "Offline" and a1["dosen"] == "Budi" and a1["mulai"] == "14.00"
       and a1["catatan"] == "cat", f"got {a1}")
 
-# 2. klasifikasi 3 status
+# 2. klasifikasi: CS301 lengkap -> refresh (row), ARCH1 rumpang -> fix
 items = _run(lambda: rekap._classify_zoom_entries(ctx, "Ratu", entries))
 kinds = [(it["kind"], it["entry"]["kode"]) for it in items]
-check("klasifikasi: CS301 lengkap di-skip, ARCH1 rumpang -> fix, tak ada yg new",
-      ("fix", "ARCH1") in kinds and len(kinds) == 1, f"got {kinds}")
-fixit = items[0]
+check("klasifikasi: CS301 lengkap -> refresh + row, ARCH1 rumpang -> fix, tak ada yg new",
+      ("refresh", "CS301") in kinds and ("fix", "ARCH1") in kinds and len(kinds) == 2,
+      f"got {kinds}")
+refreshit = next(it for it in items if it["kind"] == "refresh")
+fixit = next(it for it in items if it["kind"] == "fix")
+check("refresh item: bawa row idx baris lengkap", refreshit["row"] == 5, f"got {refreshit}")
 check("fix item: bawa row idx + gaps", fixit["row"] == 7 and fixit["gaps"] == ["Bukti"],
       f"got {fixit}")
 check("klasifikasi: status_map puntung 'none' -> new",
@@ -171,7 +175,8 @@ ctx2.user_data["rekap_tab"] = "Ratu"
 items2 = _run(lambda: rekap._classify_zoom_entries(ctx2, "Ratu", entries))
 kinds2 = [(it["kind"], it["entry"]["kode"]) for it in items2]
 check("none -> new: ARCH1 jadi ➕ padahal ada di done map",
-      ("new", "ARCH1") in kinds2 and len(kinds2) == 1, f"got {kinds2}")
+      ("new", "ARCH1") in kinds2 and ("refresh", "CS301") in kinds2 and len(kinds2) == 2,
+      f"got {kinds2}")
 
 # 3. urut tanggal lama->baru (3 entri new semua, tanggal acak)
 ROWS3 = [
@@ -214,6 +219,21 @@ bottom = kb1[-1]
 labels = [b.text for b in bottom]
 check("baris bawah: manual + batal", "➕ Buat entri lain" in " ".join(labels) and "❌ Batal" in " ".join(labels),
       f"got {labels}")
+
+# 4b. grup 🔃 sudah lengkap (di bawah ➕/🧩, urut tanggal, callback rzkr:i)
+REFRESH = [
+    {"kind": "refresh", "row": 5, "entry": {"kode": "CS301", "tanggal": "06/09/2026", "pertemuan": "4"}},
+    {"kind": "refresh", "row": 9, "entry": {"kode": "CS302", "tanggal": "07/09/2026", "pertemuan": "2"}},
+]
+kbr = rekap._zoom_kb([], 0, REFRESH)
+rb = [b for row in kbr for b in row if b.callback_data.startswith("rzkr:")]
+check("grup 🔃: tombol label + callback rzkr:0 / rzkr:1",
+      len(rb) == 2 and rb[0].text == "🔃 06/09 CS301 p.4" and rb[0].callback_data == "rzkr:0"
+      and rb[1].text == "🔃 07/09 CS302 p.2" and rb[1].callback_data == "rzkr:1",
+      f"got {[b.text for b in rb]}")
+check("grup 🔃: 🔃 di bawah ➕/🧩 + bottom manual/batal tetap terakhir",
+      [b.callback_data for b in kbr[-1]] == ["rzk:manual", "rzk:cancel"],
+      f"got {[b.callback_data for b in kbr[-1]]}")
 
 # 5. prefill zoom -> record
 e = {"kode": "ARCH1", "subject": "Arsitektur", "tanggal": "08/09/2026",

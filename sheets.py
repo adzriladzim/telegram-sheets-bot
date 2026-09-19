@@ -1391,7 +1391,7 @@ class SheetsClient:
                 missing.append("Total")
             if missing:
                 return {"state": "incomplete", "row": idx, "gaps": missing, "vals": r}
-        return {"state": "complete", "count": len(rows)}
+        return {"state": "complete", "count": len(rows), "row": rows[0][0]}
 
     async def rekap_row_status(self, tab: str, kode: str, tanggal_list: list) -> dict:
         return await self._run(partial(self._rekap_row_status, tab, kode, tanggal_list))
@@ -1419,6 +1419,50 @@ class SheetsClient:
 
     async def update_rekap_cells(self, tab: str, row_idx: int, cells: dict) -> None:
         await self._run(partial(self._update_rekap_cells, tab, row_idx, cells))
+
+    def _refresh_os(self, rekap_sheet_id: str, tab: str, row_idx: int, kode: str,
+                    pertemuan_list, dosen: str) -> tuple[dict, dict, dict]:
+        """Hitung ulang O..S baris rekap dari Absen+Feedback TERBARU — picker
+        /rekap 🔃. HANYA kolom angka (total/hadir/feedback/tidak/belum) yang
+        disentuh; B..L (termasuk Bukti L) tak pernah ditulis di sini. Tulis
+        cuma sel yang nilainya BEDA via _update_rekap_cells (invalidate + grid
+        guard + separator cache sudah ditangani di sana). Fail-open feedback:
+        Q/S dilewati bila sheet Feedback gagal dibaca. Return (changed, before,
+        after); changed = {col: (old, new)}. rekap_sheet_id diterima eksplisit
+        utk walau helper lain pakai self.cfg.rekap_sheet_id."""
+        nums = sorted({int(n) for n in re.findall(r"\d+", str(pertemuan_list or "")) if 1 <= int(n) <= 16})
+        p_first = nums[0] if nums else 1
+        counts = self._absen_counts(kode, p_first)
+        total = counts["total"]
+        fb = None
+        try:
+            fb = self._feedback_counts(kode, str(pertemuan_list or ""), dosen, counts.get("prodi", ""))
+        except Exception:  # noqa: BLE001 — fail-open: feedback gak dibaca, Q/S tak disentuh
+            fb = None
+        if total:
+            vals = {"O": str(total), "P": str(counts["hadir"]), "R": str(counts["tidak"])}
+            if fb is not None:
+                vals["Q"] = str(fb["q"])
+                vals["S"] = str(max(total - fb["q"], 0))
+        else:
+            vals = {"O": "", "P": "", "Q": "", "R": "", "S": ""}
+        cur = self._rekap_row_values(tab, row_idx)
+        before, after, changed, write = {}, {}, {}, {}
+        for col, nv in vals.items():
+            idx = ord(col) - 65
+            cv = cur[idx].strip() if len(cur) > idx else ""
+            before[col], after[col] = cv, nv
+            if nv and nv != cv:  # _update_rekap_cells menolak '' — jangan bilang berubah utk kosong
+                changed[col] = (cv, nv)
+                write[col] = nv
+        if write:
+            self._update_rekap_cells(tab, row_idx, write)
+            _rekap_status_cache.clear()
+        return changed, before, after
+
+    async def refresh_os(self, rekap_sheet_id: str, tab: str, row_idx: int, kode: str,
+                         pertemuan_list, dosen: str) -> tuple[dict, dict, dict]:
+        return await self._run(partial(self._refresh_os, rekap_sheet_id, tab, row_idx, kode, pertemuan_list, dosen))
 
     def _get_rekap_status(self, facilitator_name: str) -> tuple[set, set]:
         """(complete, incomplete) sets of (kode, tanggal).
