@@ -1279,8 +1279,7 @@ class SheetsClient:
         skip = {self._normalize(t) for t in _SYSTEM_TABS}
         best, best_len = None, 0
         for t in self._tabs(self.cfg.rekap_sheet_id):
-            t = t.strip()
-            tn = self._normalize(t)
+            tn = self._normalize(t)  # normalize for compare only — keep RAW title
             if tn in skip:
                 continue
             if tn and tn in target and len(tn) > best_len:
