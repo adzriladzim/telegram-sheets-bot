@@ -50,7 +50,7 @@ def _keyboard() -> InlineKeyboardMarkup:
         [[InlineKeyboardButton("📝 Zoom", callback_data="go:log"), InlineKeyboardButton("🧾 Rekap", callback_data="go:rekap")],
          [InlineKeyboardButton("✅ Absen", callback_data="go:absen"), InlineKeyboardButton("🔄 Backup", callback_data="go:backup")],
          [InlineKeyboardButton("❌ Cancel", callback_data="go:cancel"), InlineKeyboardButton("🗓 Jadwal", callback_data="go:schedule")],
-         [InlineKeyboardButton("ℹ️ Help", callback_data="go:help")]]
+         [InlineKeyboardButton("🔁 Tukar", callback_data="go:tukar"), InlineKeyboardButton("ℹ️ Help", callback_data="go:help")]]
     )
 
 

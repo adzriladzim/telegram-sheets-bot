@@ -468,7 +468,8 @@ async def back_to_tanggal(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 def register(app: Application, cfg: Config) -> None:
     conv = ConversationHandler(
-        entry_points=[CommandHandler("tukar", cmd_tukar)],
+        entry_points=[CommandHandler("tukar", cmd_tukar),
+                      CallbackQueryHandler(cmd_tukar, pattern=r"^go:tukar$")],
         states={
             CLASS: [CallbackQueryHandler(pick_class, pattern=r"^tk:\d+$"),
                     CallbackQueryHandler(_do_cancel, pattern=r"^tk:cancel$")],
