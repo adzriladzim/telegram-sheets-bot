@@ -1958,10 +1958,42 @@ class SheetsClient:
             self._lock.release()
 
 
-def this_week_classes(classes: list[ClassEntry]) -> dict[str, list[ClassEntry]]:
-    """Group by Indonesian day name; caller renders whole week (sheet is weekly-recurring)."""
+def _parse_tanggal_panjang(s: str):
+    """'Senin, 8 September 2026' -> date(2026, 9, 8); None bila tak bisa di-parse."""
+    m = re.search(r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})", s)
+    if not m:
+        return None
+    mm = ID_MONTHS.get(m.group(2).lower())
+    if not mm:
+        return None
+    try:
+        return datetime(int(m.group(3)), int(mm), int(m.group(1))).date()
+    except ValueError:
+        return None
+
+
+def week_span_wib(today=None) -> tuple:
+    """(Senin, Minggu) rentang minggu WIB berjalan. `today` (datetime) hanya untuk test."""
+    t = today or datetime.now(WIB)
+    mon = t - timedelta(days=t.weekday())
+    return mon.date(), (mon + timedelta(days=6)).date()
+
+
+def this_week_classes(classes: list[ClassEntry], today=None) -> dict[str, list[ClassEntry]]:
+    """Group by Indonesian day name; caller renders whole week (sheet is weekly-recurring).
+
+    Backup/Make-up (backup_hari_tanggal eksplisit) hanya tampil kalau tanggalnya
+    jatuh di minggu WIB berjalan (Senin..Minggu). Backup/make-up basi (di luar
+    window) tidak tampil di hari aktif minggu ini — mencegah "Selasa 15 Sep"
+    tampil di Selasa 20 Sep. `today` hanya untuk test. Fail-open: tanggal
+    tak bisa di-parse -> tetap tampil (perilaku lama dipertahankan)."""
+    mon, sun = week_span_wib(today)
     by_day: dict[str, list[ClassEntry]] = {}
     for c in classes:
+        if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
+            d = _parse_tanggal_panjang(c.backup_hari_tanggal)
+            if d is not None and not (mon <= d <= sun):
+                continue  # backup/make-up basi — di luar minggu berjalan
         norm = re.sub(r"[^a-z]", "", c.day.lower())
         day = next((d for d in DAY_ORDER if re.sub(r"[^a-z]", "", d.lower()) == norm), None)
         if day is None:

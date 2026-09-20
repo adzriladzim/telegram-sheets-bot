@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 
 from telegram import Update
 from telegram.constants import ParseMode
@@ -69,7 +70,10 @@ async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     tgl, fasil = note
                     lines.append(f"  🧪 make-up {html.escape(tgl)}, {html.escape(fasil)}")
             lines.append("")
-    missing = [c.code for c in classes if not sheets.this_week_classes([c])]
+    def _day_known(c):
+        norm = re.sub(r"[^a-z]", "", c.day.lower())
+        return any(re.sub(r"[^a-z]", "", d.lower()) == norm for d in sheets.DAY_ORDER)
+    missing = [c.code for c in classes if not _day_known(c)]
     if missing:
         lines.append(f"⚠️ Hari tak dikenali (cek sheet): {', '.join(html.escape(x) for x in missing)}")
     await update.effective_message.reply_text("\n".join(lines).strip(), parse_mode=ParseMode.HTML)
