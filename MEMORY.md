@@ -1,7 +1,7 @@
 # MEMORY — telegram-sheets-bot (TelefasilBot)
 
 > Per-project memory. Read at cold session start. Append-only.
-> Updated: 2026-09-20 (/laporan PDF beta committed 2202e4c + pushed main; next: Railway deploy MANUAL → set env → tes beta)
+> Updated: 2026-09-21 (fix /schedule backup basi window Senin-Minggu, BELUM commit; hybrid picker juga BELUM commit)
 
 ## What
 Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, rekap kehadiran, backup, cancel kelas langsung ke Google Sheets. Multi-user (satu bot, tiap fasil lihat jadwal sendiri). Bot: [@telefasil_bot](https://t.me/telefasil_bot).
@@ -522,4 +522,49 @@ Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, 
 - **Gate beta (handlers/laporan.py L61-76):** `_beta_allowed(chat_id, name)` = **AND** id DAN nama (casefold). Env format: `LAPORAN_BETA_IDS=2061872254`, `LAPORAN_BETA_NAMES=Adzril Adzim Hendrynov`.
 - **Status:** fitur `/laporan` committed `2202e4c` + pushed main; **BELUM deploy** Railway. Setelah deploy, isi entri [2026-09-19] `/laporan` dengan hash baru.
 - **NEXT (user):** commit → Railway Deploy → set 2 env → tes `/laporan` sbg beta tester (self-test dgn akun Adzril; Fella Amalia juga id/nama terdaftar di users.json kalau mau 2 tester).
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-21] Hybrid picker /zoom: gap-min + dupe gate + pola warning + 2 S3 (BELUM commit)
+> **BELUM commit** — hash belum ada (tunggu instruksi user). Setelah commit, isi hash + SHIPPED. Railway deploy MANUAL selalu (auto-deploy off).
+
+- **get_next_meeting = LANJUT LOGIS gap-min (bukan max+1) — `sheets.py` L693:**
+  - `_meeting_rows(kode)` (L663) scan SEMUA baris Zoom Record per kode (kelas bisa dipegang 2 fasil ganjil/genap + backup ikut merekam). `nums` = semua digit dalam teks pertemuan ("3 dan 4" → {3,4}).
+  - **Backup TIDAK menggeser progres** (L710): baris tipe Backup di-skip dari `taken`/`last` — backup P3 TIDAK bikin saran kelas loncat. Saran = **angka terkecil yang belum direkam** (gap-min), barisan tak urut aman (P3,P1 + P2 kosong → saran 2, bukan max+1=4). Last = pertemuan max reguler (bukan backup). Kontigu → max+1 tetap benar.
+- **Dupe gate (kode, tanggal kelas, pertemuan) — `_find_conflicts` L723:**
+  - Key = kode + tanggal (normalized `_norm_date`) + nums **OVERLAP** (set irisan: "3" vs "3 dan 4" kena; beda angka aman). Siapa pun perekamnya — multi-fasil aman.
+  - `_conflict_report_text` (log.py L472): lapor **siapa perekam** + baris (fasil, tanggal, pertemuan, tipe) + tawaran: ✏️ Pakai nomor lain (`back:meeting`) / ✅ Tetap simpan (koreksi) (`x:force`) / ❌ Batal. `confirm_force` (L612) set `force_conflict=True` one-shot — di-clear HANYA setelah save sukses (bukan sebelum retry, agar Retry tak minta force ulang).
+  - Dupe gate ditanyakan di CONFIRM + warning di step meeting (`_meeting_warnings` L487: pola + dupe, fail-open).
+- **Pola warning — `pola.py` BARU (45 baris) + `data/pola.json` (opsional, data/ di-gitignore):**
+  - Env `POLA_JSON_PATH` → fallback `data/pola.json`. Schema `{"PPC01": {"pertemuan": {"1": "Fasil A", ...}}}` — nilai = fragmen fasil, dibanding contains casefold.
+  - `_pola_warning` (log.py L454): fasil di luar pola → 🟡 **bukan blokir** ("Ingatkan saja, bukan blokir — Yakin tetap lanjut?"); tanpa config/kode → kosong; nama fasil dari config di-html-escape.
+  - **Deploy note:** pola.json ada di data/ lokal — Railway butuh env `POLA_JSON_PATH` atau drop ke volume `/app/data` (pola sama dgn users.json).
+- **allow_reentry:** conv `/log` diberi `allow_reentry=True` (log.py L654) — user stuck di alur lain tetap bisa masuk /log baru (konvensi lama /rekap rekap.py L989 tetap).
+- **2 S3 fixed (tema hybrid picker):** picker pertemuan SELALU tampil (pick_class → MEETING, bukan auto-jump SKEMA — user bisa ubah angka/gate dobel) + make-up read-only filter `J!=true` guard source tetap.
+- **VERIFIKASI (offline, tanpa creds):** `verify_zoom_hybrid.py` **17/17 PASS** (gap-min, kontigu, dupe gate + overlap, backup tak geser, pola 4 kasus, picker wiring, allow_reentry, J!=true) + `verify_zoom_picker.py` **22/22 PASS** + `verify_zoom_picker_groups.py` **11/11 PASS** + `verify_zoom_display.py` **8/8 PASS** (regresi). compileall OK.
+- **NEXT (user):** (1) commit → hash; (2) Railway → Deploy Latest Commit; (3) env `POLA_JSON_PATH` (kalau pola mau aktif); (4) tes /zoom live: saran pertemuan gap-min, dupe gate lapor perekam, warning pola 🟡.
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-20] fix rumus rating /laporan: mean 1-5 + 2 S3 (BELUM commit)
+> Lanjutan /laporan PDF beta `2202e4c`. **Belum commit** — hash belum ada.
+
+- **RUMUS SKOR:** `5*rate` (skala 1-25) → **mean rating 1-5**. Rating feedback = skala 1-5, aggregate = simple mean.
+- **2 S3 fixed:**
+  1. Filter prodi/school → **shared helper** (dedup absen/feedback path), dipakai konsisten di /laporan.
+  2. `_wmean` (weighted) → **`_smean`** (simple avg); test "tak sama" (smean ≠ wmean saat rating bervariasi) PASS + regresi laporan PASS.
+- **NEXT (user):** commit → hash jadi ID entri. Railway deploy MANUAL stlh `2202e4c` (auto-deploy off) + set `LAPORAN_BETA_IDS=2061872254` / `LAPORAN_BETA_NAMES=Adzril Adzim Hendrynov` → tes beta.
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-21] Fix /schedule backup basi — window Senin–Minggu WIB (BELUM commit)
+> **BELUM commit** — hash belum ada. Setelah commit, isi hash + SHIPPED. Railway deploy MANUAL selalu (auto-deploy off). Review **APPROVED**.
+
+- **SYMPTOM (laporan user):** backup "Selasa, 15 September 2026" TETAP tampil di `/schedule` pada Selasa 20 Sep 2026 — kelas basi (seminggu lalu) masih muncul di hari aktif.
+- **ROOT CAUSE:** `_fetch_backup_classes` pulangkan SEMUA baris backup cocok nama (tanpa cek tanggal) + `this_week_classes` (`sheets.py` L1982) grup **by nama hari saja**, tanpa filter tanggal window → backup eksplisit di hari manapun selalu tampil di hari aktif minggu ini.
+- **FIX (`sheets.py`):**
+  - **`week_span_wib(today)` (L1975)** — `(Senin, Minggu)` rentang minggu WIB berjalan: `mon = t - timedelta(days=t.weekday())`, `sun = mon+6`. `today` param hanya utk test.
+  - **`this_week_classes` filter window** — Backup/Make-up dgn `backup_hari_tanggal` eksplisit → parse `_parse_tanggal_panjang` ("Senin, 8 September 2026" → date); di luar `[mon..sun]` → **skip** (tidak tampil). **Fail-open:** tanggal tak bisa di-parse → TETAP tampil (perilaku lama dipertahankan).
+  - Personal reguler TIDAK berubah (selalu tampil, mingguan).
+- **Zoom/reminder/stats UTUH** — manipulasi hanya di `this_week_classes`; jalur lain (`_class_date`/`_parse_backup_date`/`next_date_for_day`) tak disentuh.
+- **VERIFIKASI:** stub baru `verify_schedule_week_window.py` **8/8 PASS** (skenario terbalik semula: backup 15 Sep TIDAK tampil di minggu 20 Sep; backup 20 Sep Minggu sblm window TIDAK; backup 1 Okt minggu depan TIDAK; makeup 16 Sep TIDAK; backup hari ini 21 Sep tampil di Senin; makeup besok 22 Sep tampil di Selasa; personal reguler selalu tampil; fail-open B-BAD "entahlah??" tetap tampil) + **regresi PASS** (stub existing). compileall OK.
+- **REVIEW:** **APPROVED.**
+- **NEXT (user):** commit → hash jadi ID entri → Railway Deploy Latest Commit → tes `/schedule` live (backup basi hilang, yang dalam window tampil, "← HARI INI" tetap).
 - **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent. Cavemem MCP down — append manual.
