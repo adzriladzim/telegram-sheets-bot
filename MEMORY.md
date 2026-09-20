@@ -1,7 +1,7 @@
 # MEMORY — telegram-sheets-bot (TelefasilBot)
 
 > Per-project memory. Read at cold session start. Append-only.
-> Updated: 2026-09-20 (redesign visual kelengkapan minggu ini stats; next: deploy → ACTIVE → tes /stats)
+> Updated: 2026-09-20 (/laporan PDF beta committed 2202e4c + pushed main; next: Railway deploy MANUAL → set env → tes beta)
 
 ## What
 Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, rekap kehadiran, backup, cancel kelas langsung ke Google Sheets. Multi-user (satu bot, tiap fasil lihat jadwal sendiri). Bot: [@telefasil_bot](https://t.me/telefasil_bot).
@@ -492,4 +492,34 @@ Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, 
 - **Usage log** aksi `rekap-refresh` + kode.
 - **VERIFIKASI:** stub baru `verify_rekap_refresh.py` **14/14 PASS** (refresh_os diff, picker refresh kind+tombol 🔃+separator, handler reply diff/no-change/fail-open, usage) + regresi `verify_zoom_picker.py` PASS + compileall OK.
 - **NEXT (user):** (1) Railway → **Deploy Latest Commit** → cek ACTIVE jadi **2f5e00c**; (2) tes /rekap: entri lengkap muncul grup 🔃 → tap → angka O–S ter-update dari feedback.
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-20] telegram-sheets-bot — /laporan PDF beta tersembunyi + 4 S3 fixed [SHIPPED] 2202e4c
+> **SHIPPED:** commit `2202e4c` (feat(laporan)) pushed ke main; deploy Railway BELUM (MANUAL oleh user, auto-deploy off).
+
+- **FITUR BARU `/laporan` — Laporan Kinerja Dosen PDF (BETA tersembunyi):**
+  - File baru `handlers/laporan.py` (628 baris; docstring: "Alpha direkayasa, silent-gated via env LAPORAN_BETA_IDS + LAPORAN_BETA_NAMES"), terdaftar `handlers/__init__.py` (import L10 + `laporan.register(app, cfg)` L39).
+  - `sheets.rekap_rows(tab)` (async read-only via `_run`) — join baca, never write.
+  - Deps `requirements.txt`: +**`fpdf2==2.8.8`**, +**`matplotlib==3.10.7`** (pin eksplisit).
+  - Fonts repo `fonts/DejaVuSans.ttf` + `DejaVuSans-Bold.ttf` (`_FONT_DIR = BASE_DIR/"fonts"` L48); fallback font bundel matplotlib utk Docker (`laporan.py` L395-404).
+- **Gate beta silent (L61-76):**
+  - `_beta_ids()` — env `LAPORAN_BETA_IDS`, split **`,`**, int-only.
+  - `_beta_names()` — env `LAPORAN_BETA_NAMES`, split **`|`** (nama bisa mengandung koma mis. "S.T., M.T."), casefold.
+  - `_beta_allowed(chat_id, name)` — **AND** id DAN nama; gagal → LOG saja + DIAM (login minimal, tanpa reply), `/laporan` TIDAK didaftarkan di help/schedule/BotCommand.
+- **Alur (L119-290):** `/laporan` → CLASS picker (personal+backup+makeup; makeup col J!=true sudah difilter) → MEETING picker → join `zoom_entries` + rekap_rows (group by kode col E) + `absen_counts` + `feedback_counts` → `_build_pdf` (thread executor) → sendDocument (⏳ loading dulu) → `usage.log(..., "laporan", kode)`.
+- **PDF tiru template contoh FELLA PPC01 (L435-540):** header biru #4558D0, 4 card skor, line chart teal #1A3C40 (`matplotlib.use("Agg")`), tabel kualitatif, footer; font `DejaVuSans` (regular+bold) → UTF-8 aman.
+- **`_MATPLOTLIB_LOCK` threading.Lock (L54)** — plt.subplots/close tak thread-safe; `_build_pdf` jalan di thread executor + `concurrent_updates=True` → serialisasi chart (per-chat lock tak cukup).
+- **Review APPROVED (beta) + 4 S3 fixed** (detail fix di repo/handlers/laporan.py).
+- **VERIFIKASI offline:** `verify_laporan.py` (baru, untracked) — PDF + chart NYATA via fpdf2/matplotlib tanpa network/creds, **22/22 PASS** + compileall OK.
+- **Status:** committed `2202e4c` + pushed main; **BELUM deploy** Railway.
+- **NEXT (user):** (1) ~~commit fitur~~ commit done `2202e4c`; (2) Railway → **Deploy Latest Commit**; (3) set env `LAPORAN_BETA_IDS` + `LAPORAN_BETA_NAMES` di Railway; (4) tes `/laporan` beta (Fella Amalia / Adzril). `.env.example` L43-44 sudah ada contohnya.
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-20] Beta tester /laporan DITETAPKAN — ID 2061872254 (Adzril) [SHIPPED] 2202e4c
+- **Keputusan:** beta tester /laporan = **ID `2061872254`** utk env `LAPORAN_BETA_IDS`.
+- **Nama dikonfirmasi dari `data/users.json` L8:** `2061872254` → **"Adzril Adzim Hendrynov"** (casefold `adzril adzim hendrynov`) utk `LAPORAN_BETA_NAMES`.
+  - Catatan: ID ini = `ADMIN_ID` yang sudah dipakai `handlers/darurat.py` L15 + `handlers/stats.py` L34.
+- **Gate beta (handlers/laporan.py L61-76):** `_beta_allowed(chat_id, name)` = **AND** id DAN nama (casefold). Env format: `LAPORAN_BETA_IDS=2061872254`, `LAPORAN_BETA_NAMES=Adzril Adzim Hendrynov`.
+- **Status:** fitur `/laporan` committed `2202e4c` + pushed main; **BELUM deploy** Railway. Setelah deploy, isi entri [2026-09-19] `/laporan` dengan hash baru.
+- **NEXT (user):** commit → Railway Deploy → set 2 env → tes `/laporan` sbg beta tester (self-test dgn akun Adzril; Fella Amalia juga id/nama terdaftar di users.json kalau mau 2 tester).
 - **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent. Cavemem MCP down — append manual.
