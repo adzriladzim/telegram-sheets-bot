@@ -1403,6 +1403,13 @@ class SheetsClient:
     async def rekap_row_values(self, tab: str, row_idx: int) -> list[str]:
         return await self._run(partial(self._rekap_row_values, tab, row_idx))
 
+    def _rekap_rows(self, tab: str) -> list[list[str]]:
+        """Semua baris tab rekap per-fasil (untuk join/laporan bacaan, never write)."""
+        return self._cached_rows(self.cfg.rekap_sheet_id, tab)
+
+    async def rekap_rows(self, tab: str) -> list[list[str]]:
+        return await self._run(partial(self._rekap_rows, tab))
+
     def _update_rekap_cells(self, tab: str, row_idx: int, cells: dict) -> None:
         if not cells:
             return
