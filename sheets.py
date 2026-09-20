@@ -34,6 +34,18 @@ def _row_has_data(row: list) -> bool:
     """True if the row has any filled cell in B..L (the rekap data columns)."""
     return any((c or "").strip() for c in row[1:12])
 
+
+def _parse_rating(value: str) -> float | None:
+    """Likert '(N) ...' -> N.0 (N=1..5); fallback angka leading. None bila tak bisa."""
+    v = (value or "").strip()
+    m = _RATING_PAT.search(v)
+    if m:
+        return float(m.group(1))
+    m = _RATING_LEAD.match(v)
+    if m:
+        return float(m.group(1))
+    return None
+
 _absen_kodes_cache: dict = {"data": None, "ts": 0}
 _absen_students_cache: dict = {}  # kode -> (ts, [(nim, nama)]); TTL see _ABSEN_STUDENTS_TTL
 _ABSEN_STUDENTS_TTL = 300
@@ -42,6 +54,13 @@ _rekap_status_cache: dict = {}
 _rekap_tab_cache: dict = {}
 _CACHE_TTL = 120
 _feedback_cache: dict = {"rows": None, "ts": 0}
+# Feedback spreadsheet (web CSAT "Form Responses 1") — dibaca READ-ONLY.
+FEEDBACK_SS_ID = "1dZQcq3TvPh7wkW0z8SF94YExs5jONYf_O3oV09Hk604"
+FEEDBACK_TAB = "Form Responses 1"
+# Kolom rating web CSAT (hasil probe live header): pemahaman r[27], interaktif
+# r[29], performa r[30]. Nilai Likert '(N) ...' / angka 1-5.
+_RATING_PAT = re.compile(r"\(\s*([1-5])\s*\)")
+_RATING_LEAD = re.compile(r"\s*([1-5])(?:\D|$)")
 # Whole-sheet row caches: (ss_id, title) -> (ts, rows). Mutated only inside
 # _run()'s single-flight lock, so no extra synchronization needed.
 _rows_cache: dict[tuple[str, str], tuple[float, list[list[str]]]] = {}
@@ -641,33 +660,86 @@ class SheetsClient:
     async def find_facilitator_names(self, search: str) -> list[str]:
         return await self._run(partial(self._find_facilitator_names, search))
 
-    def _get_next_meeting(self, kode: str) -> tuple[str, str, str]:
-        """Return (last_meeting_str, next_single, next_double). Scans Zoom Record col F=Kode, H=Pertemuan."""
+    def _meeting_rows(self, kode: str) -> list[dict]:
+        """Semua baris Zoom Record utk satu kode (SEMUA fasil — kelas bisa
+        dipegang 2 fasil ganjil/genap dan backup fasil lain ikut merekam).
+        Return per baris: {fasil, tanggal(normalized), pertemuan(raw),
+        nums(sorted set), tipe(col K), row}."""
         try:
             rows = self._cached_rows(self.cfg.sheet_id, self.cfg.zoom_record_sheet)
         except Exception as exc:
-            log.warning("next-meeting scan failed: %s", exc)
-            return ("", "1", "1 dan 2")
-        import re
-        max_n = 0
-        last_str = ""
-        for r in rows[1:]:
-            if len(r) <= 7: continue
+            log.warning("meeting-rows scan failed: %s", exc)
+            return []
+        out = []
+        for i, r in enumerate(rows):
+            if i == 0 or len(r) <= 14:
+                continue
+            if not any((c or "").strip() for c in r[1:15]):
+                continue  # baris kosong
             if r[5].strip().casefold() != kode.strip().casefold():
                 continue
             pert = r[7].strip()
-            if not pert: continue
-            last_str = pert
-            nums = [int(n) for n in re.findall(r"\d+", pert)]
-            if nums:
-                max_n = max(max_n, max(nums))
-        if max_n == 0:
+            nums = sorted({int(n) for n in re.findall(r"\d+", pert) if 1 <= int(n) <= 99})
+            out.append({
+                "fasil": r[2].strip(),
+                "tanggal": self._norm_date(r[3].strip()),
+                "pertemuan": pert,
+                "nums": nums,
+                "tipe": r[10].strip() if len(r) > 10 else "",
+                "row": i + 1,
+            })
+        return out
+
+    def _get_next_meeting(self, kode: str) -> tuple[str, str, str]:
+        """Default pintar pertemuan = LANJUT LOGIS kelas, bukan max+1.
+
+        Satu kode bisa direkam 2 fasil (ganjil/genap) + backup — progres diambil
+        dari SEMUA baris kode tsb. Rekaman backup TIDAK menggeser progres kelas
+        (backup P3 tak membuat saran kelas 'loncat'); rekan baru utk kelas backup
+        ikut nomor kelas yg sama. Barisan tak urut tak masalah: saran = angka
+        terkecil yang belum direkam (gap-min), karena max+1 melompati gap.
+        Return (last_raw, nxt_single, 'nxt dan nxt+1')."""
+        try:
+            recs = self._meeting_rows(kode)
+        except Exception as exc:
+            log.warning("next-meeting scan failed: %s", exc)
             return ("", "1", "1 dan 2")
-        nxt = max_n + 1
+        taken: set[int] = set()
+        last_str, last_max, last_row = "", -1, -1
+        for r in recs:
+            if (r["tipe"] or "").casefold() == "backup":
+                continue  # backup tidak menggeser progres kelas
+            for n in r["nums"]:
+                taken.add(n)
+                if n > last_max or (n == last_max and r["row"] > last_row):
+                    last_max, last_str, last_row = n, r["pertemuan"], r["row"]
+        if not taken:
+            return ("", "1", "1 dan 2")
+        nxt = 1
+        while nxt in taken and nxt <= 99:
+            nxt += 1
         return (last_str, str(nxt), f"{nxt} dan {nxt+1}")
+
+    def _find_conflicts(self, kode: str, tanggal: str, pertemuan_text: str) -> list[dict]:
+        """Dupe gate — key (kode, tanggal kelas, pertemuan): baris yang SAMA
+        kode + SAMA tanggal + pertemuan OVERLAP (angka beririsan, mis '3' vs
+        '3 dan 4'), siapa pun perekamnya. Return [] bila aman; else daftar
+        {fasil, tanggal, pertemuan, tipe, row} utk ditampilkan siapa perekam."""
+        tgl = self._norm_date((tanggal or "").strip())
+        nums = {int(n) for n in re.findall(r"\d+", pertemuan_text or "") if 1 <= int(n) <= 99}
+        if not tgl or not nums:
+            return []
+        out = []
+        for r in self._meeting_rows(kode):
+            if r["tanggal"] == tgl and (set(r["nums"]) & nums):
+                out.append(r)
+        return out
 
     async def get_next_meeting(self, kode: str) -> tuple[str, str, str]:
         return await self._run(partial(self._get_next_meeting, kode))
+
+    async def find_conflicts(self, kode: str, tanggal: str, pertemuan_text: str) -> list[dict]:
+        return await self._run(partial(self._find_conflicts, kode, tanggal, pertemuan_text))
 
     def _get_done_map(self, facilitator_name: str) -> set[str]:
         """Set of kode already in Zoom Record for facilitator (any pertemuan) — for backward compat."""
@@ -1538,23 +1610,23 @@ class SheetsClient:
                 return school
         return ""
 
-    def _feedback_candidates(self, kode: str, nums: set, d_toks: list) -> list[tuple[str, str, str, set]]:
-        """(nim, school, blob, majors) utk tiap baris feedback lulus filter Q —
-        SATU filter dipakai _feedback_counts DAN _feedback_nims (kode blob +
-        pertemuan + dosen; kolom sama: kode r[8:25], pertemuan r[26],
-        dosen r[25], school r[6], majors r[8:25:3]).
+    def _feedback_rows(self, kode: str, nums: set, d_toks: list):
+        """Yield (nim, school, blob, majors, row) utk tiap baris feedback lulus
+        filter Q — SATU filter dipakai _feedback_candidates, _feedback_nims,
+        _feedback_counts, _rating_feedback (kode blob + pertemuan + dosen;
+        kolom sama: kode r[8:25], pertemuan r[26], dosen r[25], school r[6],
+        majors r[8:25:3]).
         NIM format hasil probe: mayoritas full 11 digit, kadang short/aneh —
         dibiarkan raw di sini, matching ke absen dilakukan _nim_match."""
         import time
         now = time.time()
         if _feedback_cache["rows"] is None or now - _feedback_cache["ts"] > 600:
-            ss = self._client().open_by_key("1dZQcq3TvPh7wkW0z8SF94YExs5jONYf_O3oV09Hk604")
-            _feedback_cache["rows"] = ss.worksheet("Form Responses 1").get_all_values()
+            ss = self._client().open_by_key(FEEDBACK_SS_ID)
+            _feedback_cache["rows"] = ss.worksheet(FEEDBACK_TAB).get_all_values()
             _feedback_cache["ts"] = now
         rows = _feedback_cache["rows"]
         kc = kode.strip().casefold()
         seen = set()
-        out = []
         for r in rows[1:]:
             if len(r) <= 26:
                 continue
@@ -1573,8 +1645,13 @@ class SheetsClient:
                     continue
             seen.add(nim)
             majors = {c.strip().casefold() for c in r[8:25:3] if c.strip()}
-            out.append((nim, r[6].strip() if len(r) > 6 else "", blob, majors))
-        return out
+            yield (nim, r[6].strip() if len(r) > 6 else "", blob, majors, r)
+
+    def _feedback_candidates(self, kode: str, nums: set, d_toks: list) -> list[tuple[str, str, str, set]]:
+        """(nim, school, blob, majors) utk tiap baris feedback lulus filter Q —
+        delegasi _feedback_rows (lihat docstring di sana utk kolom filter)."""
+        return [(nim, school, blob, majors)
+                for nim, school, blob, majors, _ in self._feedback_rows(kode, nums, d_toks)]
 
     def _nim_match(self, absen_nim: str, fb_nim: str) -> bool:
         """Match NIM absen ke NIM feedback. Hasil probe: keduanya full 11 digit
@@ -1667,6 +1744,17 @@ class SheetsClient:
     async def convert_status(self, kode: str, pertemuan: int, nim_set: set[str]) -> list[dict]:
         return await self._run(partial(self._convert_status, kode, pertemuan, nim_set))
 
+    def _fb_prodi_school_ok(self, pn: str, school_exp: str, blob: str, majors: set, school: str) -> bool:
+        """Filter prodi+school Q — SATU untuk _feedback_counts/_rating_feedback
+        (kode+pertemuan+dosen sudah difilter di _feedback_rows)."""
+        if pn and not re.search(r"\b" + re.escape(pn) + r"\b", blob):
+            # fallback: match any major cell equality
+            if pn not in majors and not any(pn in m or m in pn for m in majors):
+                return False
+        if school_exp and school.casefold() != school_exp:
+            return False
+        return True
+
     def _feedback_counts(self, kode: str, pertemuan: str, dosen: str, prodi_tab: str) -> dict:
         """Q = distinct NIM with clean match: kode + pertemuan + dosen + prodi + school."""
         nums = set(int(n) for n in re.findall(r"\d+", pertemuan or ""))
@@ -1676,20 +1764,47 @@ class SheetsClient:
         for nim, school, blob, majors in self._feedback_candidates(kode, nums, self._norm_dosen(dosen)):
             if nim in seen:
                 continue
-            if pn and not re.search(r"\b" + re.escape(pn) + r"\b", blob):
-                # fallback: match any major cell equality
-                if pn not in majors and not any(pn in m or m in pn for m in majors):
-                    continue
-            if school_exp:
-                sch = school.casefold()
-                if sch != school_exp:
-                    continue
+            if not self._fb_prodi_school_ok(pn, school_exp, blob, majors, school):
+                continue
             seen.add(nim)
             schools[school] = schools.get(school, 0) + 1
         return {"q": len(seen), "schools": schools}
 
     async def feedback_counts(self, kode: str, pertemuan: str, dosen: str, prodi_tab: str) -> dict:
         return await self._run(partial(self._feedback_counts, kode, pertemuan, dosen, prodi_tab))
+
+    def _rating_feedback(self, kode: str, pertemuan_list: list[int], dosen: str, prodi_tab: str) -> list[dict]:
+        """Skor rating CSAT per baris feedback (filter Q SAMA _feedback_counts:
+        kode+pertemuan+dosen via _feedback_rows, lalu prodi+school via
+        _fb_prodi_school_ok). Return per baris: skorPemahaman, skorInteraktif,
+        skorPerforma (1-5 atau None bila tak terparse), csatGabungan=mean 3
+        kategori, pertemuan raw, kode.
+        Kolom rating web CSAT (probe live): pemahaman r[27], interaktif r[29],
+        performa r[30]; nilai '(N) ...' -> _parse_rating."""
+        nums = {int(p) for p in pertemuan_list if 1 <= int(p) <= 16}
+        pn = self._normalize(prodi_tab or "")
+        school_exp = self._school_for_prodi(prodi_tab or "").casefold()
+        out = []
+        for nim, school, blob, majors, r in self._feedback_rows(kode, nums, self._norm_dosen(dosen)):
+            if not self._fb_prodi_school_ok(pn, school_exp, blob, majors, school):
+                continue
+            pem = _parse_rating(r[27] if len(r) > 27 else "")
+            inter = _parse_rating(r[29] if len(r) > 29 else "")
+            perf = _parse_rating(r[30] if len(r) > 30 else "")
+            vals = [v for v in (pem, inter, perf) if v is not None]
+            out.append({
+                "nim": nim,
+                "kode": kode,
+                "pertemuan": r[26].strip() if len(r) > 26 else "",
+                "skorPemahaman": pem,
+                "skorInteraktif": inter,
+                "skorPerforma": perf,
+                "csatGabungan": round(sum(vals) / len(vals), 2) if vals else None,
+            })
+        return out
+
+    async def rating_feedback(self, kode: str, pertemuan_list: list[int], dosen: str, prodi_tab: str) -> list[dict]:
+        return await self._run(partial(self._rating_feedback, kode, pertemuan_list, dosen, prodi_tab))
 
     def _bukti_folder_for(self, drive, facilitator: str) -> str:
         """Per-fasil subfolder inside REKAP_BUKTI_FOLDER_ID (cached in data/rekap_folders.json)."""

@@ -50,7 +50,9 @@ A = {
     ],
     "log.py": [
         "html.escape(c.code)}</b> — {html.escape(c.subject)",
-        "html.escape(nxt)}</b> {auto_note",
+        "2️⃣ Pertemuan: <b>{html.escape(nxt)}</b>",
+        "html.escape(', '.join(sorted(set(bad))))",
+        "• <b>{who}</b> — pertemuan {html.escape(f.get('pertemuan', '') or '')} ({tipe})",
         "html.escape(k)}:</b> {html.escape(v)}",
     ],
     "absen.py": [

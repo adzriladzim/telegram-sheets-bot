@@ -346,32 +346,43 @@ async def _gather_report_data(context: ContextTypes.DEFAULT_TYPE, c: sheets.Clas
             counts = {"total": _int(r0, 14), "hadir": _int(r0, 15), "feedback": _int(r0, 16),
                       "tidak": _int(r0, 17), "belum": _int(r0, 18)}
         fb = None
+        ratings: list[dict] = []
         if dosen:
             try:
                 fb = await s.feedback_counts(c.code, str(p), dosen,
                                              str(counts.get("prodi", "") or ""))
+                ratings = await s.rating_feedback(c.code, [p], dosen,
+                                                  str(counts.get("prodi", "") or ""))
             except Exception:  # noqa: BLE001 — fail-open feedback
                 fb = None
+                ratings = []
         responden = (fb or {}).get("q") if fb else None
         if not responden:
             responden = counts.get("feedback", 0)
         total = counts.get("total", 0)
-        rate = (responden / total) if total else (1.0 if responden else 0.0)
-        skor = round(5.0 * rate, 2)
+
+        def _means(rows: list[dict], key: str) -> float | None:
+            vals = [r[key] for r in rows if r.get(key) is not None]
+            return round(sum(vals) / len(vals), 2) if vals else None
+
+        csat = _means(ratings, "csatGabungan")
+        skor = csat if csat is not None else 0.0
         meetings.append({"pertemuan": p, "tanggal": date, "subject": subject, "dosen": dosen,
                          "total": total, "hadir": counts.get("hadir", 0),
                          "feedback": counts.get("feedback", 0), "tidak": counts.get("tidak", 0),
-                         "belum": counts.get("belum", 0), "responden": responden, "skor": skor})
+                         "belum": counts.get("belum", 0), "responden": responden, "skor": skor,
+                         "skorPemahaman": _means(ratings, "skorPemahaman"),
+                         "skorInteraktif": _means(ratings, "skorInteraktif"),
+                         "skorPerforma": _means(ratings, "skorPerforma"),
+                         "csat": csat})
 
-    points = [m["skor"] for m in meetings]
-    w_resp = [m["responden"] for m in meetings]
-    w_hadir = [m["hadir"] for m in meetings]
+    def _smean(vals):
+        """Mean sederhana lintas pertemuan (responden TIDAK membobot) — sama
+        dgn web/admin avg sederhana; None (tak ada rating) dilewati."""
+        vals = [v for v in vals if v is not None]
+        return round(sum(vals) / len(vals), 2) if vals else 0.0
 
-    def _wmean(vals, w):
-        sw = sum(w)
-        return round(sum(v * wv for v, wv in zip(vals, w)) / sw, 2) if sw else 0.0
-
-    gabungan = round(sum(points) / len(points), 2) if points else 0.0
+    gabungan = _smean([m["csat"] for m in meetings])
     return {
         "nama": name,
         "kode": c.code,
@@ -380,9 +391,9 @@ async def _gather_report_data(context: ContextTypes.DEFAULT_TYPE, c: sheets.Clas
         "responden_total": sum(m["responden"] for m in meetings),
         "cards": [
             ("CSAT Gabungan", gabungan),
-            ("Performa", _wmean(points, w_resp)),
-            ("Pemahaman", _wmean(points, w_hadir)),
-            ("Interaktivitas", points[-1] if points else 0.0),
+            ("Performa", _smean([m["skorPerforma"] for m in meetings])),
+            ("Pemahaman", _smean([m["skorPemahaman"] for m in meetings])),
+            ("Interaktivitas", _smean([m["skorInteraktif"] for m in meetings])),
         ],
         "meetings": meetings,
         "tanggal": datetime.now(usage.WIB).strftime("%d-%m-%Y"),

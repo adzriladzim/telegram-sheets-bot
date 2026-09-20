@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 from datetime import date, datetime, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
@@ -17,6 +18,7 @@ from telegram.ext import (
     filters,
 )
 
+import pola
 import sheets
 import usage
 import users
@@ -248,7 +250,16 @@ async def back_to_meeting(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     q = update.callback_query
     await q.answer()
     c = context.user_data.get("cls")
-    last, nxt, nxt2 = context.user_data.get("suggest", ("", "1", "1 dan 2"))
+    last, def_nxt, def_nxt2 = context.user_data.get("suggest", ("", "1", "1 dan 2"))
+    # suggest bisa kedaluwarsa — pakai meeting aktual (hasil pick/ketik) utk display.
+    cur = str(context.user_data.get("meeting") or "").strip()
+    nums = [int(n) for n in re.findall(r"\d+", cur)]
+    if nums:
+        nxt = cur
+        nxt2 = f"{max(nums)} dan {max(nums) + 1}"
+        context.user_data["suggest"] = (last, nxt, nxt2)
+    else:
+        nxt, nxt2 = def_nxt, def_nxt2
     kb = _meeting_kb(nxt, nxt2)
     if last and c:
         await q.message.reply_text(f"2️⃣ Terakhir {c.code} pertemuan {last}. Mau isi {nxt}?", reply_markup=kb)
@@ -298,7 +309,7 @@ async def pick_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     c = classes[idx]
     context.user_data["cls"] = c
     await q.message.edit_text(f"Kelas: <b>{html.escape(c.code)}</b> — {html.escape(c.subject)}\n\n", parse_mode=ParseMode.HTML)
-    # Auto-suggest next meeting
+    # Auto-suggest next meeting (lanjut logis gap-min, bukan max+1)
     wait = await q.message.reply_text("⏳ Cari pertemuan terakhir...")
     try:
         last, nxt, nxt2 = await _sheets(context).get_next_meeting(c.code)
@@ -307,15 +318,15 @@ async def pick_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try: await wait.delete()
     except Exception: pass
     context.user_data["suggest"] = (last, nxt, nxt2)
-    context.user_data["meeting"] = nxt  # auto-sync dari Zoom Record, tanpa tanya
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌐 Online", callback_data="s:o"),
-         InlineKeyboardButton("🏫 Offline", callback_data="s:f")],
-        [InlineKeyboardButton("◀️ Kembali", callback_data="back:meeting")],
-    ])
-    auto_note = f"(auto pertemuan {html.escape(nxt)}" + (f", terakhir {html.escape(last)}" if last else "") + ")"
-    await q.message.reply_text(f"2️⃣ Pertemuan: <b>{html.escape(nxt)}</b> {auto_note}\n3️⃣ Skema kelas:", parse_mode=ParseMode.HTML, reply_markup=kb)
-    return SKEMA
+    context.user_data["meeting"] = nxt  # default pintar — bisa diubah di picker
+    warn = await _meeting_warnings(context, context.user_data.get("facilitator", ""), c, nxt)
+    text = f"2️⃣ Pertemuan: <b>{html.escape(nxt)}</b>"
+    if last:
+        text += f" <i>(terakhir {html.escape(last)})</i>"
+    if warn:
+        text += "\n" + warn
+    await q.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=_meeting_kb(nxt, nxt2))
+    return MEETING
 
 
 # ---------- step 2: meeting number ----------
@@ -329,27 +340,36 @@ async def pick_meeting(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         await q.message.reply_text("Ketik pertemuan (contoh: 3 atau '3 dan 4'):", reply_markup=kb)
         return MEETING
     context.user_data["meeting"] = val
+    warn = ""
+    c = context.user_data.get("cls")
+    if c:
+        warn = await _meeting_warnings(context, context.user_data.get("facilitator", ""), c, val)
+    body = warn + "\n\n3️⃣ Skema kelas:" if warn else "3️⃣ Skema kelas:"
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🌐 Online", callback_data="s:o"), InlineKeyboardButton("🏫 Offline", callback_data="s:f")],
         [InlineKeyboardButton("◀️ Kembali", callback_data="back:meeting")],
     ])
-    await q.message.reply_text("3️⃣ Skema kelas:", reply_markup=kb)
+    await q.message.reply_text(body, reply_markup=kb)
     return SKEMA
 
 async def enter_meeting(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    import re
     text = update.message.text.strip()
     nums = re.findall(r"\d+", text)
     if not nums or not all(1 <= int(n) <= 99 for n in nums):
         await update.effective_message.reply_text("Masukkan pertemuan 1–99 (bisa 1, 2 atau '1 dan 2').")
         return MEETING
     context.user_data["meeting"] = text
+    warn = ""
+    c = context.user_data.get("cls")
+    if c:
+        warn = await _meeting_warnings(context, context.user_data.get("facilitator", ""), c, text)
+    body = warn + "\n\n3️⃣ Skema kelas:" if warn else "3️⃣ Skema kelas:"
     kb = InlineKeyboardMarkup(
         [[InlineKeyboardButton("🌐 Online", callback_data="s:o"),
           InlineKeyboardButton("🏫 Offline", callback_data="s:f")],
          [InlineKeyboardButton("◀️ Kembali", callback_data="back:meeting")]]
     )
-    await update.effective_message.reply_text("3️⃣ Skema kelas:", reply_markup=kb)
+    await update.effective_message.reply_text(body, reply_markup=kb)
     return SKEMA
 
 
@@ -414,7 +434,6 @@ async def skip_note_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 def _parse_backup_date(s: str) -> str:
     """'Senin, 8 September 2026' -> '08/09/2026'."""
-    import re
     m = re.search(r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})", s)
     if not m:
         return sheets.today_str_wib()
@@ -423,16 +442,70 @@ def _parse_backup_date(s: str) -> str:
     mm = months.get(mon, "01")
     return f"{int(d):02d}/{mm}/{y}"
 
+
+def _class_date(c: sheets.ClassEntry) -> str:
+    """Tanggal kelas (dd/mm/yyyy) — key dupe gate + link ke pertemuan.
+    Backup/make-up pakai Hari/Tanggal eksplisit, personal pakai jadwal berikutnya."""
+    if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
+        return _parse_backup_date(c.backup_hari_tanggal)
+    return sheets.next_date_for_day(c.day)
+
+
+def _pola_warning(facilitator: str, kode: str, meeting: str) -> str:
+    """🟡 warning pola (data/pola.json) — bukan blokir. Tanpa config = kosong."""
+    pmap = pola.pola_for(kode)
+    if not pmap:
+        return ""
+    nums = sorted({int(n) for n in re.findall(r"\d+", meeting or "")})
+    hits = [pmap[str(n)] for n in nums if str(n) in pmap]
+    if not hits or not facilitator:
+        return ""
+    fn = re.sub(r"\s+", " ", facilitator.strip()).casefold()
+    bad = [h for h in hits if not (h.casefold() in fn or fn in h.casefold())]
+    if not bad:
+        return ""
+    return (f"🟡 <b>Pola {html.escape(kode)}</b>: pertemuan {html.escape(meeting)} "
+            f"biasanya dipegang <b>{html.escape(', '.join(sorted(set(bad))))}</b>. "
+            f"Ingatkan saja, bukan blokir — Yakin tetap lanjut?")
+
+
+def _conflict_report_text(code: str, tanggal: str, meeting: str, found: list) -> str:
+    """Teks dupe gate: siapa perekam yang sudah rekam key sama."""
+    lines = []
+    for f in found:
+        who = html.escape(f.get("fasil") or "(tanpa nama)")
+        tipe = html.escape(f.get("tipe") or "")
+        lines.append(f"• <b>{who}</b> — pertemuan {html.escape(f.get('pertemuan', '') or '')} ({tipe})")
+    return (
+        f"⚠️ Sudah ada rekaman utk <b>{html.escape(code)}</b> "
+        f"({html.escape(tanggal)}) pertemuan <b>{html.escape(meeting)}</b>:\n"
+        + "\n".join(lines)
+        + "\n\nPilih: pakai nomor lain, atau koreksi (tetap simpan)."
+    )
+
+
+async def _meeting_warnings(context: ContextTypes.DEFAULT_TYPE, facilitator: str,
+                            c: sheets.ClassEntry, meeting: str) -> str:
+    """Gabungan warning pertemuan: pola (config) + konflik dupe (kode+tanggal+ptm).
+    Fail-open: sheets error diabaikan — picker tetap jalan."""
+    warnings = []
+    pola_warn = _pola_warning(facilitator, c.code, meeting)
+    if pola_warn:
+        warnings.append(pola_warn)
+    try:
+        found = await _sheets(context).find_conflicts(c.code, _class_date(c), meeting)
+    except Exception:
+        found = []
+    if found:
+        warnings.append(_conflict_report_text(c.code, _class_date(c), meeting, found))
+    return "\n".join(warnings)
+
 def _build_record(context: ContextTypes.DEFAULT_TYPE) -> sheets.LogRecord:
     c: sheets.ClassEntry = context.user_data["cls"]
     # Zoom: user input (step 4) OR auto from Jadwal Fasil
     zoom = context.user_data.get("zoom", "") or c.zoom_label
-    # Lecture date: backup/make-up pakai Hari/Tanggal eksplisit, personal pakai
-    # jadwal berikutnya hari kelas.
-    if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
-        lecture_date = _parse_backup_date(c.backup_hari_tanggal)
-    else:
-        lecture_date = sheets.next_date_for_day(c.day)
+    # Tanggal kelas: backup/make-up eksplisit, personal jadwal berikutnya.
+    lecture_date = _class_date(c)
     return sheets.LogRecord(
         facilitator=context.user_data.get("facilitator") or context.bot_data["cfg"].facilitator_name,
         lecture_date=lecture_date,
@@ -486,6 +559,23 @@ async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             await q.message.reply_text("Dibatalkan. Kirim /log untuk coba lagi.")
             return ConversationHandler.END
         rec = _build_record(context)
+        # Dupe gate (kode, tanggal, pertemuan): jangan bikin dobel diam-diam.
+        # Tampilkan siapa perekam + tawarkan nomor lain / koreksi.
+        try:
+            found = await _sheets(context).find_conflicts(rec.code, rec.lecture_date, rec.meeting)
+        except Exception:
+            found = []
+        if found and not context.user_data.get("force_conflict"):
+            context.user_data["_conflicts"] = found
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✏️ Pakai nomor lain", callback_data="back:meeting"),
+                 InlineKeyboardButton("✅ Tetap simpan (koreksi)", callback_data="x:force")],
+                [InlineKeyboardButton("❌ Batal", callback_data="x:no")],
+            ])
+            await q.message.reply_text(
+                _conflict_report_text(rec.code, rec.lecture_date, rec.meeting, found),
+                parse_mode=ParseMode.HTML, reply_markup=kb)
+            return CONFIRM
         retries = context.user_data.get("_retries", 0)
         busy = await q.message.reply_text("⏳ Menyimpan ke Zoom Record...")
         try:
@@ -507,11 +597,24 @@ async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             return CONFIRM
         try: await busy.delete()
         except Exception: pass
+        # Force lewat dupe gate hanya valid utk simpan ini — clear setelah sukses,
+        # bukan sebelum retry, agar Retry tak minta force ulang.
+        context.user_data.pop("force_conflict", None)
         log.info("Saved record: %s mtg %s scheme %s", rec.code, rec.meeting, rec.scheme)
-        usage.log(update.effective_chat.id, rec.facilitator, "zoom", rec.code)
+        # Fail-open: usage tracking tak pernah mematahkan alur utama.
+        usage.log(update.effective_chat.id, rec.facilitator, "zoom", rec.code,
+                  tipe=rec.tipe_kelas, meeting=rec.meeting)
         await q.message.reply_text(f"✅ Tercatat di sheet! {rec.code} — pertemuan {rec.meeting} ({rec.scheme}).\nKirim /log untuk entry berikutnya.")
         context.user_data.clear()
         return ConversationHandler.END
+
+
+async def confirm_force(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Koreksi sadar dari dupe gate: lanjut simpan walau key sudah direkam."""
+    q = update.callback_query
+    await q.answer()
+    context.user_data["force_conflict"] = True
+    return await confirm_cb(update, context)
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -541,12 +644,13 @@ def register(app: Application, cfg: Config) -> None:
                 CommandHandler("skip", skip_note),
                 MessageHandler(_SKIP_FILTER, enter_note),
             ],
-            CONFIRM: [CallbackQueryHandler(confirm_cb, pattern=r"^x:(ok|no)$"), CallbackQueryHandler(back_to_note, pattern=r"^back:note$")],
+            CONFIRM: [CallbackQueryHandler(confirm_cb, pattern=r"^x:(ok|no)$"), CallbackQueryHandler(confirm_force, pattern=r"^x:force$"), CallbackQueryHandler(back_to_note, pattern=r"^back:note$"), CallbackQueryHandler(back_to_meeting, pattern=r"^back:meeting$")],
             # v22: on_timeout param removed — next update after timeout lands in TIMEOUT state
             ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, timeout)],
         },
         fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", cancel), CommandHandler(["log", "zoom", "zoom_record"], cmd_log)],
         conversation_timeout=_TIMEOUT,
         name="log_conv",
+        allow_reentry=True,
     )
     app.add_handler(conv)
