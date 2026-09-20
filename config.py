@@ -70,6 +70,9 @@ class Config:
     heartbeat_enabled: bool
     darurat_online: bool = False
 
+    # Tab Tukar Jadwal (swap fasil, tanpa approval) — dibuat otomatis bila belum ada.
+    tukar_sheet: str = "Tukar Jadwal"
+
     # Column layout of the Zoom Record sheet (B..O -> index 1..14)
     # Batch 5 (Ganjil 26/27): Kelas(F), Mata Kuliah(G) — swapped vs old batch
     record_columns: tuple[str, ...] = field(
@@ -116,6 +119,7 @@ def load_config() -> Config:
         zoom_record_sheet=os.getenv("ZOOM_RECORD_SHEET_NAME", "Zoom Record Blok A Ganjil 26/27").strip(),
         backup_sheet=os.getenv("BACKUP_SHEET_NAME", "Backup Fasilitator Blok A Ganjil 26/27").strip(),
         cancel_sheet=os.getenv("CANCEL_SHEET_NAME", "Kelas Cancel & Pengganti Blok A Ganjil 26/27").strip(),
+        tukar_sheet=os.getenv("TUKAR_SHEET_NAME", "Tukar Jadwal").strip(),
         absen_sheet_id=os.getenv("ABSEN_SHEET_ID", "1QA2K2HKBNQzt9VVnZrOv7SeyAcOonEWfejVoGmfkBEg").strip(),
         absen_sheet_name=os.getenv("ABSEN_SHEET_NAME", "Computer Science").strip(),
         rekap_sheet_id=os.getenv("REKAP_SHEET_ID", "1FUK-c1AzTscfXZLQETpGbiyyVCw38n-8FnvYi-lD3Rw").strip(),

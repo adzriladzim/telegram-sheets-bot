@@ -7,7 +7,7 @@ from telegram import Update
 from telegram.ext import Application, ContextTypes
 
 from config import Config
-from handlers import absen, backup, cancel, darurat, heartbeat, laporan, log, rekap, reminder, schedule, sinkron, start, stats
+from handlers import absen, backup, cancel, darurat, heartbeat, laporan, log, rekap, reminder, schedule, sinkron, start, stats, tukar
 from handlers.register import register as register_user_cmd  # alias: name `register` below is the package-level fn
 
 log_ = logging.getLogger(__name__)
@@ -33,6 +33,7 @@ def register(app: Application, cfg: Config) -> None:
     sinkron.register(app, cfg)
     darurat.register(app, cfg)
     schedule.register(app, cfg)
+    tukar.register(app, cfg)
     stats.register(app, cfg)
     reminder.register(app, cfg)
     heartbeat.register(app, cfg)

@@ -12,7 +12,7 @@ import socket
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import partial
 
 import gspread
@@ -109,6 +109,17 @@ CNL_SESI, CNL_JADWAL_AWAL, CNL_JAM, CNL_SKS = 4, 5, 6, 7
 CNL_FASIL, CNL_STATUS, CNL_JADWAL_MAKEUP, CNL_JAM_MAKEUP = 8, 9, 11, 12
 CNL_FASIL_MAKEUP, CNL_ZOOM_NO, CNL_ZOOM_LINK, CNL_ROOM, CNL_KET = 13, 14, 15, 16, 17
 
+# Tukar Jadwal sheet columns (0-indexed, tab 'Tukar Jadwal' — bot OWN tab,
+# dibuat otomatis bila belum ada; MASTER/BACKUP/CANCEL tidak pernah disentuh):
+# A No  B Dicatat(WIB)  C Dicatat oleh  D Kode saya  E Tanggal  F Tukar dengan
+# G Kode dia  H Pola(sekali|tetap|jam)  I Jam  J Status(AKTIF|BATAL)  K Catatan
+SWAP_NO, SWAP_DICATAT, SWAP_OLAH, SWAP_KODE_SAYA = 0, 1, 2, 3
+SWAP_TANGGAL, SWAP_DENGAN, SWAP_KODE_DIA, SWAP_POLA = 4, 5, 6, 7
+SWAP_JAM, SWAP_STATUS, SWAP_CATATAN = 8, 9, 10
+SWAP_COLS = "A:K"
+SWAP_POLA_OK = {"sekali", "tetap", "jam"}
+SWAP_STATUS_AKTIF, SWAP_STATUS_BATAL = "AKTIF", "BATAL"
+
 TIPE_KELAS_MAP = {"reguler": "Reguler", "professional": "Professional", "akselerasi": "Akselerasi", "akselerasi & professional": "Akselerasi & Professional", "professional & akselerasi": "Akselerasi & Professional", "pro": "Professional", "ae": "Akselerasi", "ae & pro": "Akselerasi & Professional", "pro & ae": "Akselerasi & Professional"}
 DAY_ORDER = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
 
@@ -165,6 +176,8 @@ class ClassEntry:
     backup_hari_tanggal: str = ""  # only for backup classes: full "Senin, 8 September 2026"
     semester: str = ""  # derived from RomBel e.g. "3 & 4"
     row_index: int = -1  # 0-based index in get_all_values()
+    swap_tanggal: str = ""  # Tukar: dd/mm/yyyy saat kelas ini efektif (sekali/jam); "" = jadwal normal
+    swap_giver: str = ""  # Tukar: fasil yg menyerahkan kelas ini (display saja)
 
     @property
     def start_time(self) -> str:
@@ -284,6 +297,32 @@ class CancelRecord:
         ]
 
 
+@dataclass
+class SwapRecord:
+    """A row for the Tukar Jadwal sheet (A..K). Satu baris = satu event bilateral:
+    `oleh` menyerahkan `kode_saya` (X) ke `dengan`, dan menerima `kode_dia` (Y).
+    Tanpa approval — siapa catat duluan menang, riwayat tetap ada setelah batal."""
+
+    no: str
+    dicatat: str        # WIB "%Y-%m-%d %H:%M"
+    oleh: str           # fasil yang catat (pencatat di chat)
+    kode_saya: str      # X — kelas yang diserahkan oleh `oleh`
+    tanggal: str        # dd/mm/yyyy untuk sekali/jam; "" untuk tetap
+    dengan: str         # fasil lawan — menerima X, menyerahkan Y
+    kode_dia: str       # Y — kelas yang diterima `oleh` dari `dengan`
+    pola: str           # sekali | tetap | jam
+    jam: str = ""       # slot display utk pola jam (optional)
+    status: str = SWAP_STATUS_AKTIF
+    catatan: str = ""
+
+    def as_row(self) -> list[str]:
+        return [
+            self.no, self.dicatat, self.oleh, self.kode_saya, self.tanggal,
+            self.dengan, self.kode_dia, self.pola, self.jam, self.status,
+            self.catatan,
+        ]
+
+
 ID_MONTHS = {"januari": "01", "februari": "02", "maret": "03", "april": "04",
              "mei": "05", "juni": "06", "juli": "07", "agustus": "08",
              "september": "09", "oktober": "10", "november": "11", "desember": "12"}
@@ -347,6 +386,10 @@ class RekapRecord:
 
 def today_str_wib() -> str:
     return datetime.now(WIB).strftime("%d/%m/%Y")
+
+
+def today_date_wib() -> date:
+    return datetime.now(WIB).date()
 
 
 def next_date_for_day(day_name: str) -> str:
@@ -626,6 +669,8 @@ class SheetsClient:
         if hit and _t.time() - hit[0] < _CACHE_TTL:
             return hit[1]
         res = await self._run(partial(self._fetch_classes, name))
+        # Tukar overlay: baca swap dulu (jadwal/zoom/rekap lihat pemilik baru).
+        res = await self._run(partial(self._merged_classes, name, res))
         _classes_cache[key] = (_t.time(), res)
         return res
 
@@ -1344,6 +1389,291 @@ class SheetsClient:
         self._invalidate_rows(self.cfg.sheet_id, self.cfg.cancel_sheet)
         log.info("Wrote cancel %s/%s at row %d", rec.kode, rec.sesi, insert_row)
         return ws.row_count
+
+    # ---------- Tukar Jadwal (swap fasil, tanpa approval) ----------
+
+    _SWAP_HEADER = ["No", "Dicatat", "Dicatat oleh", "Kode saya", "Tanggal",
+                    "Tukar dengan", "Kode dia", "Pola", "Jam", "Status", "Catatan"]
+
+    def _ensure_swap_sheet(self, create: bool = False) -> bool:
+        """Pastikan tab Tukar ada. Read path (create=False) fail-open: tab belum
+        ada / gagal akses -> False (usage jadwal tidak boleh mati karena swap).
+        Write path (create=True): buat tab sekali + header, invalidate cache."""
+        try:
+            ws = self._sheet_in(self.cfg.sheet_id, self.cfg.tukar_sheet)
+            return ws is not None
+        except SheetsError:
+            if not create:
+                return False
+        ws = self._ss(self.cfg.sheet_id).add_worksheet(
+            title=self.cfg.tukar_sheet, rows=200, cols=11)
+        ws.update("A1:K1", [self._SWAP_HEADER], value_input_option="USER_ENTERED")
+        _tabs_cache.pop(self.cfg.sheet_id, None)
+        self._invalidate_rows(self.cfg.sheet_id, self.cfg.tukar_sheet)
+        log.info("Tukar tab %r dibuat", self.cfg.tukar_sheet)
+        return True
+
+    def _swap_rows(self) -> list[list[str]]:
+        """Seluruh baris tab Tukar (cached). Tab hilang/tak terakses -> [] (fail-open)."""
+        try:
+            return self._cached_rows(self.cfg.sheet_id, self.cfg.tukar_sheet)
+        except SheetsError:
+            return []
+
+    @staticmethod
+    def _swap_records(rows: list[list[str]]) -> list[dict]:
+        out = []
+        for r in rows[1:]:
+            vals = [(r[i].strip() if len(r) > i else "") for i in range(11)]
+            if not vals[SWAP_NO] or not vals[SWAP_KODE_SAYA]:
+                continue
+            out.append({
+                "no": vals[SWAP_NO], "dicatat": vals[SWAP_DICATAT],
+                "oleh": vals[SWAP_OLAH], "kode_saya": vals[SWAP_KODE_SAYA],
+                "tanggal": vals[SWAP_TANGGAL], "dengan": vals[SWAP_DENGAN],
+                "kode_dia": vals[SWAP_KODE_DIA], "pola": vals[SWAP_POLA],
+                "jam": vals[SWAP_JAM], "status": vals[SWAP_STATUS],
+                "catatan": vals[SWAP_CATATAN],
+            })
+        return out
+
+    @staticmethod
+    def _norm_tanggal(s: str) -> str:
+        """'6/9/2026' -> '06/09/2026'; tak bisa di-parse -> ''."""
+        m = re.match(r"\s*(\d{1,2})/(\d{1,2})/(\d{4})\s*$", (s or "").strip())
+        if not m:
+            return ""
+        return f"{int(m.group(1)):02d}/{int(m.group(2)):02d}/{m.group(3)}"
+
+    def _parse_tanggal(self, s: str) -> date | None:
+        """dd/mm/yyyy -> date; None bila format salah / tanggal tak valid."""
+        d = self._norm_tanggal(s)
+        if not d:
+            return None
+        dd, mm, yy = d.split("/")
+        try:
+            return date(int(yy), int(mm), int(dd))
+        except ValueError:
+            return None
+
+    def _swap_conflict(self, records: list[dict], kode_a: str, kode_b: str,
+                       tanggal: str, pola: str) -> dict | None:
+        """Siapa catat duluan menang: event AKTIF yg menyentuh salah satu kode
+        (a/b) dgn scope bertabrakan -> return si event lama; else None.
+        Scope: tetap = selamanya (semua tanggal); sekali/jam = tanggal sama."""
+        ka, kb = self._normalize(kode_a), self._normalize(kode_b)
+        for sw in records:
+            if sw.get("status") != SWAP_STATUS_AKTIF:
+                continue
+            codes = {self._normalize(sw.get("kode_saya", "")), self._normalize(sw.get("kode_dia", ""))}
+            if ka not in codes and kb not in codes:
+                continue
+            if pola == "tetap" or sw.get("pola") == "tetap":
+                return sw
+            if tanggal and sw.get("tanggal") and self._norm_tanggal(tanggal) == self._norm_tanggal(sw.get("tanggal") or ""):
+                return sw
+        return None
+
+    def _append_swap(self, rec: SwapRecord) -> str:
+        """Catat event swap. Reject bila KONFLIK dgn event AKTIF existing
+        (first-wins; single-flight _run = race antar chat aman). Return No (id)."""
+        pola = (rec.pola or "").strip().casefold()
+        if pola not in SWAP_POLA_OK:
+            raise SheetsError("Pola harus sekali / tetap / jam.")
+        tanggal = self._norm_tanggal(rec.tanggal) if rec.tanggal else ""
+        if pola in ("sekali", "jam") and not tanggal:
+            raise SheetsError("Tanggal wajib utk pola sekali/jam (dd/mm/yyyy).")
+        if not self._ensure_swap_sheet(create=True):
+            raise SheetsError("Tidak bisa membuat tab Tukar — cek izin admin.")
+        rows = self._cached_rows(self.cfg.sheet_id, self.cfg.tukar_sheet)
+        conflict = self._swap_conflict(
+            self._swap_records(rows), rec.kode_saya, rec.kode_dia, tanggal, pola)
+        if conflict:
+            who = conflict.get("oleh") or "-"
+            raise SheetsError(
+                f"Sudah ada tukar utk kode tsb (dicatat {who}, "
+                f"id #{conflict.get('no')}) — siapa catat duluan menang. "
+                "Pakai /tukar_riwayat utk lihat.")
+        insert_row = len(rows) + 1
+        for i, r in enumerate(rows):
+            if i == 0:
+                continue  # header
+            if not any((r[j].strip() if len(r) > j else "") for j in range(1, 11)):
+                insert_row = i + 1
+                break
+        no = str(insert_row - 1)
+        rec.no, rec.tanggal, rec.pola = no, tanggal, pola
+        ws = self._sheet(self.cfg.tukar_sheet)
+        self._guard_grid(ws, ["K"], insert_row)
+        ws.update(f"A{insert_row}:K{insert_row}", [rec.as_row()], value_input_option="USER_ENTERED")
+        self._invalidate_rows(self.cfg.sheet_id, self.cfg.tukar_sheet)
+        _classes_cache.clear()  # ownership may change for BOTH fasil
+        log.info("Swap #%s: %s gives %s <-> %s (%s, %s)", no, rec.oleh, rec.kode_saya,
+                 rec.kode_dia, rec.pola, rec.tanggal or "tetap")
+        return no
+
+    def _cancel_swap(self, row_id: str, by: str, note: str = "", hard: bool = False) -> int:
+        """Undo: BATAL = soft (row kept, history). Admin hapus = hard (row cleared).
+        Return 1 berhasil, 0 id tak ada, -1 sudah BATAL sebelumnya."""
+        rows = self._cached_rows(self.cfg.sheet_id, self.cfg.tukar_sheet)
+        target = None
+        for i, r in enumerate(rows):
+            if i == 0:
+                continue
+            if r and r[0].strip() == str(row_id).strip():
+                target = (i + 1, r)
+                break
+        if target is None:
+            return 0
+        row_idx, vals = target
+        ws = self._sheet(self.cfg.tukar_sheet)
+        if hard:
+            self._guard_grid(ws, ["K"], row_idx)
+            ws.batch_clear([f"A{row_idx}:K{row_idx}"])
+            self._invalidate_rows(self.cfg.sheet_id, self.cfg.tukar_sheet)
+            _classes_cache.clear()
+            log.info("Swap #%s hard-delete oleh %s", row_id, by)
+            return 1
+        old_status = vals[SWAP_STATUS].strip() if len(vals) > SWAP_STATUS else ""
+        if old_status == SWAP_STATUS_BATAL:
+            return -1
+        catatan = f"{by}: {note}".strip() or by
+        self._guard_grid(ws, ["K"], row_idx)
+        ws.update(f"J{row_idx}", [[SWAP_STATUS_BATAL]], value_input_option="USER_ENTERED")
+        ws.update(f"K{row_idx}", [[catatan]], value_input_option="USER_ENTERED")
+        self._invalidate_rows(self.cfg.sheet_id, self.cfg.tukar_sheet)
+        _classes_cache.clear()
+        log.info("Swap #%s batal oleh %s (%s)", row_id, by, note or "-")
+        return 1
+
+    def _master_row_by_code(self, code: str) -> list | None:
+        rows = self._cached_rows(self.cfg.sheet_id, self.cfg.master_sheet)
+        target = self._normalize(code)
+        for i, row in enumerate(rows):
+            if i == 0 or len(row) <= COL_ZOOM_LINK:
+                continue
+            if self._normalize(row[COL_KODE].strip()) == target:
+                return row
+        return None
+
+    def _make_swap_entry(self, swap: dict, master_row: list) -> ClassEntry | None:
+        """ClassEntry sintetis utk kelas yang DITERIMA dari swap. Data dari
+        baris master kode lawan; swap_tanggal/swap_giver diisi utk display."""
+        if master_row is None:
+            return None
+        rombel_raw = master_row[COL_ROMBEL].strip()
+        sems = sorted(set(re.findall(r"\b(\d+)\b", rombel_raw)))
+        return ClassEntry(
+            code=master_row[COL_KODE].strip(),
+            subject=master_row[COL_MK].strip(),
+            day=master_row[COL_DAY].strip(),
+            time_range=master_row[COL_JAM].strip(),
+            category="Tukar",
+            lecturer=master_row[COL_DOSEN].strip(),
+            room=rombel_raw,
+            rombel=rombel_raw,
+            sks=master_row[COL_SKS].strip(),
+            zoom_number=master_row[COL_ZOOM_NO].strip(),
+            zoom_link=master_row[COL_ZOOM_LINK].strip(),
+            keterangan=master_row[COL_KETERANGAN].strip() if len(master_row) > COL_KETERANGAN else "",
+            semester=" & ".join(sems) if sems else "",
+            swap_tanggal=swap.get("tanggal", "") or "",
+            swap_giver=swap.get("oleh", "") or "",
+        )
+
+    def _merged_classes(self, name: str, classes: list[ClassEntry]) -> list[ClassEntry]:
+        """Overlay swap AKTIF di kelas personal master. Tetap = ownership ganti
+        permanen. Sekali/jam = date-scoped: kelas diserahkan dilepas & kelas
+        lawan muncul selama tanggal swap belum lewat; setelah lewat otomatis
+        balik (self-healing). Tab Tukar tak ada / rusak -> return apa adanya."""
+        rows = self._swap_rows()
+        if not rows:
+            return classes
+        records = [sw for sw in self._swap_records(rows) if sw.get("status") == SWAP_STATUS_AKTIF]
+        if not records:
+            return classes
+        nname = self._normalize(name)
+        today = today_date_wib()
+
+        def _sw_still_active(s: dict) -> bool:
+            """Swap masih menahan kelas (owner belum balik)? Tetap = selalu.
+            Sekali/jam: tanggal belum lewat; tanggal tak bisa di-parse -> aktif
+            (konservatif — jangan double-book kelas yg masih ditukar)."""
+            if s["pola"] == "tetap":
+                return True
+            if not s["tanggal"]:
+                return False
+            d = self._parse_tanggal(s["tanggal"])
+            return d is None or d >= today
+
+        # role utk name: (kode_dilepas, kode_diterima, partner, swap)
+        mine = []
+        for sw in records:
+            if self._normalize(sw.get("oleh") or "") == nname:
+                mine.append((sw["kode_saya"], sw["kode_dia"], sw["dengan"], sw))
+            elif self._normalize(sw.get("dengan") or "") == nname:
+                mine.append((sw["kode_dia"], sw["kode_saya"], sw["oleh"], sw))
+        if not mine:
+            return classes
+        out = []
+        for c in classes:
+            sw = next((m for m in mine if self._normalize(m[0]) == self._normalize(c.code)), None)
+            if sw is None:
+                out.append(c)
+                continue
+            if _sw_still_active(sw[3]):
+                continue  # kelas dilepas utk swap tsb (tetap / sekali / jam belum lewat)
+            out.append(c)  # tanggal lewat -> kepemilikan balik
+        # tambah kelas yang DITERIMA (tetap: selalu; sekali/jam: tanggal belum lewat)
+        for gived, gained, partner, s in mine:
+            if _sw_still_active(s):
+                row = self._master_row_by_code(gained)
+                entry = self._make_swap_entry(s, row) if row is not None else None
+                if entry is not None and self._normalize(entry.code) != self._normalize(gived):
+                    out.append(entry)
+        return out
+
+    # ---------- Tukar public async API ----------
+
+    async def append_swap(self, rec: SwapRecord) -> str:
+        """Catat swap (single-flight: conflict check + write atomic). Return No."""
+        return await self._run(partial(self._append_swap, rec))
+
+    async def list_swaps(self, limit: int = 30) -> list[dict]:
+        def _ls():
+            return self._swap_records(self._swap_rows())[-int(limit):]
+        return await self._run(_ls)
+
+    async def cancel_swap(self, row_id: str, by: str, note: str = "", hard: bool = False) -> int:
+        """1 = berhasil, 0 = id tak ada, -1 = sudah BATAL sebelumnya."""
+        return await self._run(partial(self._cancel_swap, row_id, by, note, hard))
+
+    async def cancel_swap_owned(self, row_id: str, by: str, is_admin: bool,
+                                note: str = "") -> tuple[int, str]:
+        """Lookup + otorisasi + soft-cancel dalam SATU operasi single-flight
+        (bebas TOCTOU). Return (1, owner) berhasil; (0, '') id tak ada;
+        (-1, owner) sudah BATAL; (-2, owner) bukan pencatat/admin.
+        `owner` = pencatat asli baris ('' bila id tak ada)."""
+        def _cs():
+            rows = self._cached_rows(self.cfg.sheet_id, self.cfg.tukar_sheet)
+            owner = ""
+            for i, r in enumerate(rows):
+                if i == 0:
+                    continue
+                if r and r[0].strip() == str(row_id).strip():
+                    owner = r[SWAP_OLAH].strip() if len(r) > SWAP_OLAH else ""
+                    break
+            else:
+                return (0, "")
+            if not is_admin and self._normalize(owner) != self._normalize(by):
+                return (-2, owner)
+            return (self._cancel_swap(row_id, by, note), owner)
+        return await self._run(_cs)
+
+    async def code_exists(self, code: str) -> bool:
+        def _ce():
+            return self._master_row_by_code(code) is not None
+        return await self._run(_ce)
 
     def _find_rekap_tab(self, facilitator_name: str) -> str:
         """Match registered name to per-fasil tab (nickname titles). Longest match wins."""

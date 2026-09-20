@@ -23,6 +23,7 @@ HELP = (
     "• /rekap — rekap kehadiran fasil\n"
     "• /backup — izin & backup fasil\n"
     "• /cancel — lapor kelas cancel\n"
+    "• /tukar — tukar jadwal fasil (tanpa approval, sepakati via WA; /tukar_batal &lt;id&gt; utk batalkan)\n"
     "• /schedule — lihat jadwal minggu ini\n"
     "• /help — bantuan ini\n\n"
     "<b>📌 Keterangan ikon:</b>\n"
