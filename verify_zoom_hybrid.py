@@ -168,11 +168,17 @@ finally:
 
 # ---------- 6. picker selalu tampil + wiring ----------
 src = Path("handlers/log.py").read_text(encoding="utf-8")
-meeting_kb_src = ("_meeting_kb(nxt, nxt2)" in src
-                  and "await q.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=_meeting_kb(nxt, nxt2))" in src)
+step_src = src.split("async def _meeting_step")[1].split("async def")[0]
+meeting_kb_src = ("_meeting_kb(nxt, nxt2)" in step_src
+                  and "await q.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=_meeting_kb(nxt, nxt2))" in step_src
+                  and "return MEETING" in step_src)
+pick_src = src.split("async def pick_class")[1].split("async def")[0]
 check("picker: pick_class kirim _meeting_kb + return MEETING (bukan auto-jump SKEMA)",
-      meeting_kb_src and "return MEETING" in src.split("async def pick_class")[1].split("async def")[0],
-      "pick_class tidak rerender meeting picker")
+      meeting_kb_src and ("return await _meeting_step(q, context, c)" in pick_src or "return _meeting_step(q, context, c)" in pick_src),
+      "meeting picker tidak dirender via _meeting_step")
+check("date: pick_class kelas personal tampilkan pilihan tanggal (d:next/d:last) sebelum meeting",
+      "async def pick_date" in src and "d:(next|last)" in src and "return DATE" in pick_src,
+      "date step untuk kelas personal hilang")
 check("allow_reentry=True terpasang di conv /log",
       re.search(r"allow_reentry\s*=\s*True", src) is not None, "allow_reentry tidak ketemu")
 check("dupe gate: handler x:force + back:meeting di state CONFIRM",

@@ -26,7 +26,7 @@ from config import Config
 
 log = logging.getLogger(__name__)
 
-CLASS, MEETING, SKEMA, ZOOM, NOTE, CONFIRM = range(6)
+CLASS, DATE, MEETING, SKEMA, ZOOM, NOTE, CONFIRM = range(7)
 _TIMEOUT = 60 * 60  # 1 hour
 
 _SKIP_FILTER = filters.TEXT & ~filters.COMMAND
@@ -298,17 +298,18 @@ async def back_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     return ConversationHandler.END
 
 
-async def pick_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    q = update.callback_query
-    await q.answer()
-    idx = int(q.data.split(":")[1])
-    classes: list[sheets.ClassEntry] = context.user_data.get("classes") or []
-    if not 0 <= idx < len(classes):
-        await q.message.reply_text("Pilihan kedaluwarsa — kirim /log lagi.")
-        return ConversationHandler.END
-    c = classes[idx]
-    context.user_data["cls"] = c
-    await q.message.edit_text(f"Kelas: <b>{html.escape(c.code)}</b> — {html.escape(c.subject)}\n\n", parse_mode=ParseMode.HTML)
+def _date_kb(c: sheets.ClassEntry) -> InlineKeyboardMarkup:
+    last = sheets.last_date_for_day(c.day)
+    nxt = sheets.next_date_for_day(c.day)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"📅 {sheets.tanggal_panjang(nxt)} · jadwal berikutnya", callback_data="d:next")],
+        [InlineKeyboardButton(f"📅 {sheets.tanggal_panjang(last)} · pertemuan terakhir", callback_data="d:last")],
+        [InlineKeyboardButton("◀️ Kembali", callback_data="back:class")],
+    ])
+
+
+async def _meeting_step(q, context: ContextTypes.DEFAULT_TYPE, c: sheets.ClassEntry) -> int:
+    """Step 2 render (lanjutan pick_class / pick_date). Default meeting = gap-min."""
     # Auto-suggest next meeting (lanjut logis gap-min, bukan max+1)
     wait = await q.message.reply_text("⏳ Cari pertemuan terakhir...")
     try:
@@ -327,6 +328,44 @@ async def pick_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         text += "\n" + warn
     await q.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=_meeting_kb(nxt, nxt2))
     return MEETING
+
+
+async def pick_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query
+    await q.answer()
+    idx = int(q.data.split(":")[1])
+    classes: list[sheets.ClassEntry] = context.user_data.get("classes") or []
+    if not 0 <= idx < len(classes):
+        await q.message.reply_text("Pilihan kedaluwarsa — kirim /log lagi.")
+        return ConversationHandler.END
+    c = classes[idx]
+    context.user_data["cls"] = c
+    context.user_data.pop("lecture_date", None)  # override tanggal — reset tiap pick kelas
+    await q.message.edit_text(f"Kelas: <b>{html.escape(c.code)}</b> — {html.escape(c.subject)}\n\n", parse_mode=ParseMode.HTML)
+    # Kelas personal: tawarkan tanggal (pertemuan terakhir vs jadwal berikutnya),
+    # sebelum lanjut ke pertemuan. Default = jadwal berikutnya (perilaku lama).
+    # Backup/make-up tanggal eksplisit -> langsung ke step pertemuan.
+    if c.category not in ("Backup", "Make-up"):
+        last = sheets.last_date_for_day(c.day)
+        nxt = sheets.next_date_for_day(c.day)
+        if last != nxt:
+            await q.message.reply_text("📅 Tanggal kelasnya? — pilih salah satu (default jadwal berikutnya)",
+                                       reply_markup=_date_kb(c))
+            return DATE
+    return await _meeting_step(q, context, c)
+
+
+async def pick_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query
+    await q.answer()
+    c = context.user_data.get("cls")
+    if not c:
+        await q.message.reply_text("Pilihan kedaluwarsa — kirim /zoom lagi.")
+        return ConversationHandler.END
+    context.user_data["lecture_date"] = (
+        sheets.last_date_for_day(c.day) if q.data == "d:last" else sheets.next_date_for_day(c.day)
+    )
+    return await _meeting_step(q, context, c)
 
 
 # ---------- step 2: meeting number ----------
@@ -443,12 +482,13 @@ def _parse_backup_date(s: str) -> str:
     return f"{int(d):02d}/{mm}/{y}"
 
 
-def _class_date(c: sheets.ClassEntry) -> str:
+def _class_date(context: ContextTypes.DEFAULT_TYPE, c: sheets.ClassEntry) -> str:
     """Tanggal kelas (dd/mm/yyyy) — key dupe gate + link ke pertemuan.
-    Backup/make-up pakai Hari/Tanggal eksplisit, personal pakai jadwal berikutnya."""
+    Backup/make-up pakai Hari/Tanggal eksplisit; personal pakai pilihan user
+    (default jadwal berikutnya)."""
     if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
         return _parse_backup_date(c.backup_hari_tanggal)
-    return sheets.next_date_for_day(c.day)
+    return context.user_data.get("lecture_date") or sheets.next_date_for_day(c.day)
 
 
 def _pola_warning(facilitator: str, kode: str, meeting: str) -> str:
@@ -493,19 +533,19 @@ async def _meeting_warnings(context: ContextTypes.DEFAULT_TYPE, facilitator: str
     if pola_warn:
         warnings.append(pola_warn)
     try:
-        found = await _sheets(context).find_conflicts(c.code, _class_date(c), meeting)
+        found = await _sheets(context).find_conflicts(c.code, _class_date(context, c), meeting)
     except Exception:
         found = []
     if found:
-        warnings.append(_conflict_report_text(c.code, _class_date(c), meeting, found))
+        warnings.append(_conflict_report_text(c.code, _class_date(context, c), meeting, found))
     return "\n".join(warnings)
 
 def _build_record(context: ContextTypes.DEFAULT_TYPE) -> sheets.LogRecord:
     c: sheets.ClassEntry = context.user_data["cls"]
     # Zoom: user input (step 4) OR auto from Jadwal Fasil
     zoom = context.user_data.get("zoom", "") or c.zoom_label
-    # Tanggal kelas: backup/make-up eksplisit, personal jadwal berikutnya.
-    lecture_date = _class_date(c)
+    # Tanggal kelas: backup/make-up eksplisit, personal pilihan user (default berikutnya).
+    lecture_date = _class_date(context, c)
     return sheets.LogRecord(
         facilitator=context.user_data.get("facilitator") or context.bot_data["cfg"].facilitator_name,
         lecture_date=lecture_date,
@@ -635,6 +675,8 @@ def register(app: Application, cfg: Config) -> None:
             CLASS: [CallbackQueryHandler(pick_class, pattern=r"^c:\d+$"),
                     CallbackQueryHandler(toggle_done_view, pattern=r"^vd:[01]$"),
                     CallbackQueryHandler(back_cancel, pattern=r"^back:cancel$")],
+            DATE: [CallbackQueryHandler(pick_date, pattern=r"^d:(next|last)$"),
+                   CallbackQueryHandler(back_to_class, pattern=r"^back:class$")],
             MEETING: [CallbackQueryHandler(pick_meeting, pattern=r"^m:"), CallbackQueryHandler(back_to_class, pattern=r"^back:class$"), MessageHandler(_SKIP_FILTER, enter_meeting)],
             SKEMA: [CallbackQueryHandler(pick_scheme, pattern=r"^s:[of]$"), CallbackQueryHandler(back_to_meeting, pattern=r"^back:meeting$")],
             ZOOM: [MessageHandler(_SKIP_FILTER, enter_zoom)],
