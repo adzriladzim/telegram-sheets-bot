@@ -52,7 +52,9 @@ def _zoom_sks_map(zoom_rows: list[list[str]]) -> dict[str, set[str]]:
 
 def _collect_candidates(rows: list[list[str]]) -> list[tuple[int, str, str, str]]:
     """(row, pertemuan_G, sks_H, kode_E) — gabungan (>=2 angka) DAN H digit murni.
-    Butuh B(tanggal) + E(kode) ada (bukan baris kosong/separator)."""
+    Butuh B(tanggal) + E(kode) ada (bukan baris kosong/separator).
+    Pengecualian: kode CDC* / AsDs* (case-insensitive) TAK jadi kandidat —
+    ikut master apa adanya, jangan disentuh."""
     out = []
     for i, r in enumerate(rows):
         if len(r) <= 7:
@@ -61,14 +63,21 @@ def _collect_candidates(rows: list[list[str]]) -> list[tuple[int, str, str, str]
         kode = r[4].strip()
         prtm = r[6].strip()
         sks = r[7].strip()
-        if tgl and kode and len(_NUM.findall(prtm)) >= 2 and re.fullmatch(r"\d+", sks):
+        if not (tgl and kode):
+            continue
+        if (kode or "").casefold().startswith(("cdc", "asds")):
+            continue
+        if len(_NUM.findall(prtm)) >= 2 and re.fullmatch(r"\d+", sks):
             out.append((i + 1, prtm, sks, kode))
     return out
 
 
 def _fix_sks(prtm: str, sks: str, kode: str, sks_map: dict[str, set[str]]) -> str | None:
     """H baru utk jelas-single, None = ambigu/jangan sentuh.
-    Clear: H == satu-satunya zoom J utk kode -> int(H) * len(nums)."""
+    Clear: H == satu-satunya zoom J utk kode -> int(H) * len(nums).
+    CDC* / AsDs* (case-insensitive) selalu None — master apa adanya."""
+    if (kode or "").strip().casefold().startswith(("cdc", "asds")):
+        return None
     nums = _NUM.findall(prtm or "")
     if len(nums) < 2 or not re.fullmatch(r"\d+", (sks or "").strip()):
         return None
@@ -89,9 +98,12 @@ def _selftest() -> None:
         ["3", "", "Dosen", "18.00", "IF-103", "Matkul", "3 dan 4", "2"],                  # tanpa tanggal -> no
         ["4", "6 September 2026", "Dosen", "18.00", "IF-104", "Matkul", "3 dan 4", "4"], # H!=zoom J -> no
         ["5", "6 September 2026", "Dosen", "18.00", "IF-105", "Matkul", "3 dan 4", "2"], # zoom tak ketemu -> no
+        ["6", "6 September 2026", "Dosen", "18.00", "CDC123", "Matkul", "3 dan 4", "2"], # CDC -> no (master apa adanya)
+        ["7", "6 September 2026", "Dosen", "18.00", "AsDs2", "Matkul", "1 dan 2", "4"],  # AsDs -> no (master apa adanya)
     ]
     cand = _collect_candidates(rows)
-    # kandidat = semua gabungan+digit (1,4,5); row 2 single & row 3 tanpa tanggal bukan kandidat.
+    # kandidat = semua gabungan+digit (1,4,5); row 2 single & row 3 tanpa tanggal
+    # & row 6-7 CDC/AsDs bukan kandidat.
     # Ambigu (4: H!=zoom J, 5: zoom tak ketemu) baru digugurkan di _fix_sks -> SKIP.
     assert [c[0] for c in cand] == [1, 4, 5], cand
     m = {"if-101": {"2"}, "if-104": {"2"}}
@@ -101,6 +113,9 @@ def _selftest() -> None:
     assert _fix_sks("3", "2", "IF-101", m) is None          # single -> no
     assert _fix_sks("3 dan 4", "dua", "IF-101", m) is None  # bukan digit -> no
     assert _fix_sks("3 dan 4", "3", "IF-101", m) is None    # H!=zoom J -> no
+    assert _fix_sks("3 dan 4", "2", "CDC123", m) is None    # CDC -> no (master)
+    assert _fix_sks("1 dan 2", "4", "AsDs2", m) is None     # AsDs -> no (master)
+    assert _fix_sks("1 dan 2", "4", "asds2", m) is None     # case-insensitive
     zr = [["Hdr"] * 12, ["1", "01/09/2026", "Ratu", "06/09/2026", "1", "ARCH1", "Arsitektur", "3 dan 4", "Offline", "2", "Pro", "Budi"]]
     zm = _zoom_sks_map(zr)
     assert zm == {"arch1": {"2"}}, zm

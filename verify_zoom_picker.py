@@ -302,6 +302,20 @@ check("prefill zoom->record: tanggal/pertemuan/tipe/sks/dosen",
       and rec.sks == "4" and rec.lecturer == "Budi" and rec.kode == "ARCH1",
       f"got {rec}")
 
+# 7b. SKS gabungan: CDC*/AsDs* ikut master (tanpa ×sesi); lainnya × pertemuan
+check("sks_efektif AsDs2 '1 dan 2' -> master (4) tanpa ×2",
+      rekap._sks_efektif("4", "1 dan 2", "AsDs2") == "4", f"got {rekap._sks_efektif('4', '1 dan 2', 'AsDs2')!r}")
+check("sks_efektif CDC* case-insensitive -> master apa adanya",
+      rekap._sks_efektif("4", "1 dan 2", "CDC123") == "4"
+      and rekap._sks_efektif("3", "3 dan 4", "cdc007") == "3",
+      f"got {rekap._sks_efektif('4', '1 dan 2', 'CDC123')!r}")
+check("sks_efektif kode lain tetap ×sesi (Eng/ARCH1 '3 dan 4' 2 -> 4)",
+      rekap._sks_efektif("2", "3 dan 4", "ARCH1") == "4", f"got {rekap._sks_efektif('2', '3 dan 4', 'ARCH1')!r}")
+check("sks_efektif single / kode kosong: tetap apa adanya",
+      rekap._sks_efektif("2", "3", "ARCH1") == "2"
+      and rekap._sks_efektif("3", "3 dan 4", "") == "6",
+      f"got {rekap._sks_efektif('3', '3 dan 4', '')!r}")
+
 # 8. register: state ZOOM + handler rzk ada (pattern wiring)
 import re as _re
 src = Path("handlers/rekap.py").read_text(encoding="utf-8")
