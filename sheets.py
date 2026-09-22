@@ -1110,18 +1110,28 @@ class SheetsClient:
                 "rows": blocks[0][1] if blocks else [],
                 "nim_header": blocks[0][2] if blocks else -1}
 
-    def _update_absen(self, kode: str, pertemuan: int, identifiers: list[str], status: str,
+    def _update_absen(self, kode: str, pertemuan: int | list[int], identifiers: list[str], status: str,
                       pengisi: str = "") -> dict:
         res = self._resolve_absen(kode, identifiers)
-        if not 1 <= pertemuan <= 16:
+        # Gabungan sesi: pertemuan sebagai list (mis. [3, 4]) menulis status yang
+        # sama ke dua kolom (P3 + P4) sekaligus. Akur int => list 1 elemen.
+        if isinstance(pertemuan, int):
+            pers = [pertemuan]
+        elif isinstance(pertemuan, (list, tuple)) and len(pertemuan) > 0:
+            pers = list(dict.fromkeys(int(p) for p in pertemuan))
+        else:
             raise SheetsError("Pertemuan harus 1-16")
-        col_idx = 3 + (pertemuan - 1)
-        col_letter = chr(ord('A') + col_idx)
+        for p in pers:
+            if not 1 <= p <= 16:
+                raise SheetsError("Pertemuan harus 1-16")
+        col_letters = [chr(ord('A') + 3 + (p - 1)) for p in pers]
+        per_label = " & ".join(str(p) for p in pers)
         updated = 0
         data = []
         written_titles = set()
         for r_idx, nim, nama, mode, title in res["matched"]:
-            data.append({"range": f"{_q(title)}!{col_letter}{r_idx+1}", "values": [[status]]})
+            for col_letter in col_letters:
+                data.append({"range": f"{_q(title)}!{col_letter}{r_idx+1}", "values": [[status]]})
             written_titles.add(title)
             updated += 1
         # Sheet convention (client manual habit, verified live by probe): a block
@@ -1141,7 +1151,9 @@ class SheetsClient:
                 nim_headers.setdefault(t, []).append(nh)
             for title in sorted(written_titles):
                 for nh in nim_headers.get(title, []) or []:
-                    if nh >= 0:
+                    if nh < 0:
+                        continue
+                    for col_letter in col_letters:
                         header_cells.append(f"{_q(title)}!{col_letter}{nh + 3}")
                         data.append({"range": header_cells[-1], "values": [[pengisi]]})
         if data:
@@ -1150,8 +1162,8 @@ class SheetsClient:
             for title in written_titles:
                 self._invalidate_rows(self.cfg.absen_sheet_id, title)
         self._invalidate_absen_students(kode)
-        log.info("Updated absen %s pertemuan %d status %s: %d rows (%s)%s",
-                 kode, pertemuan, status, updated, ",".join(sorted(written_titles)) or "-",
+        log.info("Updated absen %s pertemuan %s status %s: %d rows (%s)%s",
+                 kode, per_label, status, updated, ",".join(sorted(written_titles)) or "-",
                  f" pengisi={pengisi}" if pengisi else "")
         if updated == 0 and not res["ambiguous"] and not res["unmatched"]:
             raise SheetsError("Tidak ada NIM/Nama yang cocok")
@@ -1163,7 +1175,7 @@ class SheetsClient:
                 "pengisi": pengisi,
                 "header_cells": header_cells}
 
-    async def update_absen(self, kode: str, pertemuan: int, identifiers: list[str], status: str,
+    async def update_absen(self, kode: str, pertemuan: int | list[int], identifiers: list[str], status: str,
                            pengisi: str = "") -> dict:
         return await self._run(partial(self._update_absen, kode, pertemuan, identifiers, status, pengisi))
 

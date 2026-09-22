@@ -105,6 +105,12 @@ async def back_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 def _pertemuan_prompt_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Kembali", callback_data="abk:back_kode")]])
 
+def _fmt_pertemuan(per) -> str:
+    """'3' utk single, '3 dan 4' utk gabungan (list)."""
+    if isinstance(per, (list, tuple)):
+        return " dan ".join(str(p) for p in per)
+    return str(per)
+
 
 def _method_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
@@ -126,7 +132,7 @@ def _status_kb() -> InlineKeyboardMarkup:
 async def back_to_pertemuan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
-    await q.message.reply_text("2️⃣ Pertemuan ke-? (1-16)", reply_markup=_pertemuan_prompt_kb())
+    await q.message.reply_text("2️⃣ Pertemuan ke-? (1-16 · gabungan: 3 dan 4 / 3-4)", reply_markup=_pertemuan_prompt_kb())
     return PERTEMUAN
 
 async def pick_kode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -137,24 +143,37 @@ async def pick_kode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if kode == "manual":
         await q.message.reply_text("Ketik Kode Kelas (contoh: Arch1):")
         return KODE
+    if kode == "cancel":
+        return await back_cancel(update, context)
     context.user_data["absen_kode"] = kode
     await q.message.edit_text(f"Kode: <b>{html.escape(kode)}</b>", parse_mode=ParseMode.HTML)
-    await q.message.reply_text("2️⃣ Pertemuan ke-? (1-16)", reply_markup=_pertemuan_prompt_kb())
+    await q.message.reply_text("2️⃣ Pertemuan ke-? (1-16 · gabungan: 3 dan 4 / 3-4)", reply_markup=_pertemuan_prompt_kb())
     return PERTEMUAN
 
 async def enter_kode_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     kode = update.message.text.strip()
     context.user_data["absen_kode"] = kode
-    await update.effective_message.reply_text(f"Kode: {kode}\n2️⃣ Pertemuan ke-? (1-16)", reply_markup=_pertemuan_prompt_kb())
+    await update.effective_message.reply_text(f"Kode: {kode}\n2️⃣ Pertemuan ke-? (1-16 · gabungan: 3 dan 4 / 3-4)", reply_markup=_pertemuan_prompt_kb())
     return PERTEMUAN
 
 async def enter_pertemuan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     import re
     t = update.message.text.strip()
-    if not t.isdigit() or not 1 <= int(t) <= 16:
-        await update.effective_message.reply_text("Masukkan 1-16")
+    m = re.match(r"^(\d{1,2})\s*(?:dan|[-&])\s*(\d{1,2})$", t, re.IGNORECASE)
+    if m:
+        a, b = int(m.group(1)), int(m.group(2))
+        if not (1 <= a <= 16 and 1 <= b <= 16):
+            await update.effective_message.reply_text("Masukkan 1-16")
+            return PERTEMUAN
+        if a == b:
+            await update.effective_message.reply_text("Sesi gabungan butuh dua nomor berbeda (mis: 3 dan 4).")
+            return PERTEMUAN
+        context.user_data["absen_pertemuan"] = [a, b]
+    elif t.isdigit() and 1 <= int(t) <= 16:
+        context.user_data["absen_pertemuan"] = int(t)
+    else:
+        await update.effective_message.reply_text("Masukkan 1-16 (gabungan: 3 dan 4 / 3-4)")
         return PERTEMUAN
-    context.user_data["absen_pertemuan"] = int(t)
     await update.effective_message.reply_text("3️⃣ Input via?", reply_markup=_method_kb())
     return METHOD
 
@@ -360,7 +379,8 @@ async def pick_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     kode = context.user_data["absen_kode"]
     per = context.user_data["absen_pertemuan"]
     ids = context.user_data["absen_identifiers"]
-    txt = f"📋 <b>Konfirmasi Absen:</b>\n• Kode: {html.escape(kode)}\n• Pertemuan: {per}\n• Status: {status}\n• Jumlah: {len(ids)}\n• NIM/Nama: {', '.join(html.escape(x) for x in ids[:5])}{' ...' if len(ids)>5 else ''}\n\nSubmit?"
+    per_fmt = _fmt_pertemuan(per) + (" (gabungan)" if isinstance(per, (list, tuple)) else "")
+    txt = f"📋 <b>Konfirmasi Absen:</b>\n• Kode: {html.escape(kode)}\n• Pertemuan: {per_fmt}\n• Status: {status}\n• Jumlah: {len(ids)}\n• NIM/Nama: {', '.join(html.escape(x) for x in ids[:5])}{' ...' if len(ids)>5 else ''}\n\nSubmit?"
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Submit", callback_data="abc:ok"), InlineKeyboardButton("❌ Batal", callback_data="abc:no")],
         [InlineKeyboardButton("◀️ Kembali", callback_data="abc:back")],
@@ -417,7 +437,7 @@ async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         if res["unmatched"]:
             extra += f"\n❌ Tak ketemu: {', '.join(res['unmatched'][:5])}"
         nama_pengisi = res.get("pengisi") or "-"
-        await q.message.reply_text(f"✅ Absen tercatat: {kode} pertemuan {per} → {n} mahasiswa status {status}"
+        await q.message.reply_text(f"✅ Absen tercatat: {kode} pertemuan {_fmt_pertemuan(per)} → {n} mahasiswa status {status}"
                                    f"\n👤 Pengisi: {nama_pengisi}{extra}")
         # Drop the buttons so a second tap of ✅ Submit can't re-enter and blow up
         # on cleared user_data (double-tap -> KeyError -> 2x "kesalahan internal").
@@ -453,5 +473,6 @@ def register(app: Application, cfg: Config) -> None:
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         conversation_timeout=_TIMEOUT, name="absen_conv",
+        allow_reentry=True,
     )
     app.add_handler(conv)

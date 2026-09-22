@@ -782,6 +782,15 @@ def _tanggal_kelas(context, c) -> str:
     return sheets.tanggal_panjang(sheets.next_date_for_day(c.day))
 
 
+def _sks_efektif(sks: str, meeting: str) -> str:
+    """SKS sesi gabungan = SKS dasar × jumlah pertemuan ('3 dan 4' → ×2).
+    Digit guard: meeting tanpa >=2 angka (single) atau SKS bukan angka murni
+    → biarkan SKS apa adanya (nilai lama/manual tak diganggu)."""
+    if len(re.findall(r"\d+", meeting or "")) >= 2 and re.fullmatch(r"\d+", (sks or "").strip()):
+        return str(int((sks or "").strip()) * len(re.findall(r"\d+", meeting)))
+    return sks or ""
+
+
 def _build_base(context, c, tanggal) -> sheets.RekapRecord:
     meeting = context.user_data.get("meeting", "")
     return sheets.RekapRecord(
@@ -792,7 +801,7 @@ def _build_base(context, c, tanggal) -> sheets.RekapRecord:
         jam=c.time_range,
         kode=c.code,
         subject=c.subject,
-        sks=c.sks,
+        sks=_sks_efektif(c.sks, meeting),
         pertemuan=meeting,
         tipe=context.user_data.get("tipe", ""),
         sesi=context.user_data.get("sesi", "Kelas Biasa"),

@@ -299,7 +299,7 @@ rec = rekap._build_base(bctx, cls_from, rekap._tanggal_kelas(bctx, cls_from))
 check("prefill zoom->record: tanggal/pertemuan/tipe/sks/dosen",
       rec.tanggal == rekap.sheets.tanggal_panjang("08/09/2026")
       and rec.pertemuan == "3 dan 4" and rec.tipe == "On-site"
-      and rec.sks == "2" and rec.lecturer == "Budi" and rec.kode == "ARCH1",
+      and rec.sks == "4" and rec.lecturer == "Budi" and rec.kode == "ARCH1",
       f"got {rec}")
 
 # 8. register: state ZOOM + handler rzk ada (pattern wiring)
