@@ -46,7 +46,8 @@ async def cmd_absen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
     from sheets import today_day_wib
     today = today_day_wib()
-    today_kodes = [c.code for c in my_classes if c.day == today]
+    today_kodes = [c.code for c in my_classes
+                   if sheets.backup_date_in_week(c) and c.day == today]
     # Unique preserve order
     seen=set(); my_today=[]
     for k in today_kodes:

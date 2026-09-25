@@ -576,9 +576,51 @@ class SheetsClient:
                 f"Target kolom melebihi batas sheet '{ws.title}' "
                 f"({ws.col_count} kolom) — tab salah. Hubungi admin.")
 
+    def _class_week_date_str(self, day_name: str) -> str | None:
+        """dd/mm/yyyy kemunculan kelas REKUREN hari `day_name` di minggu WIB
+        berjalan (last/next — sama dgn _class_week_date di handlers/log.py).
+        Personal = jadwal mingguan, jadi selalu ada 1 kemunculan di window."""
+        mon, sun = week_span_wib()
+        for s in (last_date_for_day(day_name), next_date_for_day(day_name)):
+            d = self._parse_tanggal(s)
+            if d is not None and mon <= d <= sun:
+                return s
+        return None
+
+    def _active_backup_keys(self, facilitator_name: str) -> set[tuple[str, str]]:
+        """(kode.casefold(), dd/mm/yyyy) baris Backup di mana `facilitator_name`
+        terdaftar sebagai FASIL AWAL (col B). Arah kebalikan _fetch_backup_classes
+        (pengganti col I): kelas milik user yang sedang didelegasikan ke pengganti.
+        Dipakai: (1) sembunyikan kelas dari picker A, (2) anggap sudah done utk A
+        kalau pengganti mencatatnya di Zoom Record (col C tetap perekam).
+
+        NOTE: return SEMUA entries historis by design (tanpa filter minggu) —
+        consumer memfilter minggu & butuh tanggal penuh utk lookup _get_done_by_date."""
+        try:
+            rows = self._cached_rows(self.cfg.sheet_id, self.cfg.backup_sheet)
+        except SheetsError:
+            return set()
+        target = self._normalize(facilitator_name)
+        out: set[tuple[str, str]] = set()
+        # Backup sheet: row0 = info, row1 = header, data dari row2
+        for i, row in enumerate(rows):
+            if i < 2 or len(row) <= 4:
+                continue
+            awal = row[1].strip() if len(row) > 1 else ""  # Col B = fasil awal
+            if not awal or self._normalize(awal) != target:
+                continue
+            kode = row[4].strip() if len(row) > 4 else ""  # Col E
+            tgl = self._norm_date(row[2].strip()) if len(row) > 2 else ""  # Col C
+            if kode and tgl:
+                out.add((kode.casefold(), tgl))
+        return out
+
     def _fetch_classes(self, facilitator_name: str) -> list[ClassEntry]:
         rows = self._cached_rows(self.cfg.sheet_id, self.cfg.master_sheet)
         target = self._normalize(facilitator_name)
+        # Kelas milik user yang sedang didelegasikan (baris Backup aktif match
+        # kode+tanggal minggu ini) dibuang — pengganti yang bertanggung jawab.
+        delegated = self._active_backup_keys(facilitator_name)
         out: list[ClassEntry] = []
         for i, row in enumerate(rows):
             if len(row) <= COL_ZOOM_LINK or i == 0:
@@ -590,6 +632,11 @@ class SheetsClient:
             code = row[COL_KODE].strip()
             if not code:
                 continue
+            day = row[COL_DAY].strip()
+            if delegated:
+                dkey = self._class_week_date_str(day)
+                if dkey and (code.casefold(), dkey) in delegated:
+                    continue  # kelas ini dibackup minggu ini — jangan tampil ke A
             # Derive semester from RomBel e.g. "3 Ilkom Pro, 4 Ilkom Pro" -> "3 & 4"
             rombel_raw = row[COL_ROMBEL].strip()
             sems = sorted(set(re.findall(r"\b(\d+)\b", rombel_raw)))
@@ -598,7 +645,7 @@ class SheetsClient:
                 ClassEntry(
                     code=code,
                     subject=row[COL_MK].strip(),
-                    day=row[COL_DAY].strip(),
+                    day=day,
                     time_range=row[COL_JAM].strip(),
                     category=row[COL_KATEGORI].strip(),
                     lecturer=row[COL_DOSEN].strip(),
@@ -830,14 +877,17 @@ class SheetsClient:
             log.warning("done-by-date scan failed: %s", exc)
             return set()
         target = self._normalize(facilitator_name)
+        # Kelas yang sedang didelegasikan (A = fasil awal) dianggap DONE utk A
+        # walau Zoom Record col C = pengganti (attribusi tetap perekam).
+        delegated = self._active_backup_keys(facilitator_name)
         done = set()
         for r in rows[1:]:
             if len(r) <= 5: continue
-            if self._normalize(r[2]) != target:
-                continue
             kode = r[5].strip().casefold()
             tgl = self._norm_date(r[3].strip())  # Col D
-            if kode and tgl:
+            if not kode or not tgl:
+                continue
+            if self._normalize(r[2]) == target or (kode, tgl) in delegated:
                 done.add((kode, tgl))
         return done
 
@@ -1211,11 +1261,16 @@ class SheetsClient:
         return zoom_no, sks, semester, ket_master
 
     def _fetch_backup_classes(self, facilitator_name: str) -> list[ClassEntry]:
-        """Classes where facilitator is listed as Fasil Pengganti in Backup sheet."""
+        """Classes where facilitator is listed as Fasil Pengganti in Backup sheet.
+
+        Filter minggu WIB berjalan: backup basi (tanggal di luar Senin..Minggu)
+        TIDAK dikembalikan — mencegah 'Selasa 8 Sep' muncul/men-spam di 'Selasa
+        15 Sep'. Fail-open: tanggal tak ter-parse -> tetap tampil (perilaku lama)."""
         try:
             rows = self._cached_rows(self.cfg.sheet_id, self.cfg.backup_sheet)
         except SheetsError:
             return []
+        mon, sun = week_span_wib()
         target = self._normalize(facilitator_name)
         out: list[ClassEntry] = []
         # Backup sheet: row0 = info, row1 = header, data from row2
@@ -1229,6 +1284,9 @@ class SheetsClient:
             if not kode:
                 continue
             hari_tanggal = row[2].strip() if len(row) > 2 else ""  # Col C
+            d_bs = _parse_tanggal_panjang(hari_tanggal)
+            if d_bs is not None and not (mon <= d_bs <= sun):
+                continue  # backup basi / di luar minggu berjalan — lewati
             day = hari_tanggal.split(",")[0].strip() if "," in hari_tanggal else hari_tanggal.split()[0] if hari_tanggal else ""
             # Lookup zoom/sks/semester/keterangan from master by kode (rombel-match
             # prefer backup Col H = room/rombel, else first kode match).
@@ -1379,6 +1437,7 @@ class SheetsClient:
         self._guard_grid(ws, ["J"], insert_row)
         ws.update(f"B{insert_row}:J{insert_row}", [row_data], value_input_option="USER_ENTERED")
         self._invalidate_rows(self.cfg.sheet_id, self.cfg.backup_sheet)
+        _classes_cache.clear()  # delegasi baru: kelas A harus langsung hilang dari picker
         log.info("Wrote backup %s/%s at row %d", rec.kode, rec.hari_tanggal, insert_row)
         return ws.row_count
 
@@ -2344,6 +2403,18 @@ def this_week_classes(classes: list[ClassEntry], today=None) -> dict[str, list[C
     for lst in by_day.values():
         lst.sort(key=lambda c: c.start_time)
     return by_day
+
+
+def backup_date_in_week(c: ClassEntry, today=None) -> bool:
+    """Backup/Make-up: backup_hari_tanggal jatuh di minggu WIB berjalan
+    (Senin..Minggu)? Personal: selalu True (jadwal mingguan rekuren).
+    Fail-open: tanggal tak ter-parse -> True (perilaku lama). Dipakai reminder /
+    absen supaya backup basi lintas minggu tidak ikut match day-name."""
+    if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
+        mon, sun = week_span_wib(today)
+        d = _parse_tanggal_panjang(c.backup_hari_tanggal)
+        return d is None or (mon <= d <= sun)
+    return True
 
 
 def today_day_wib() -> str:

@@ -74,6 +74,8 @@ async def _filter_todo(
     now = sheets.today_str_wib()
     todo = []
     for c in mine:
+        if not sheets.backup_date_in_week(c):
+            continue  # backup/make-up basi lintas minggu — jangan remind
         if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
             tgl = _parse_backup_date(c.backup_hari_tanggal)
         else:
@@ -99,6 +101,8 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     classes = personal + backup + makeup
     today = sheets.today_day_wib()
+    # Window minggu dulu (backup/make-up basi jangan match day-name), baru day match.
+    classes = [c for c in classes if sheets.backup_date_in_week(c)]
     mine = [c for c in classes if _norm_day(c.day) == _norm_day(today)]
     if not mine:
         log.debug("No class today (%s) for %s / %s", today, facilitator, chat_id)

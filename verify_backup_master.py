@@ -55,7 +55,7 @@ def fresh_client(ss_main):
         facilitator_name="", master_sheet="Master", zoom_record_sheet="Zoom Record",
         backup_sheet="Backup", cancel_sheet="Cancel", absen_sheet_id="ss_absen",
         absen_sheet_name="Absen", rekap_sheet_id="ss_rekap", rekap_bukti_folder_id="",
-        semester="1", reminder_hour=11, reminder_minute=0, reminder_enabled=False,
+        semester="1", reminder_slots=((21, 0),), reminder_enabled=False,
         heartbeat_hour=22, heartbeat_minute=0, heartbeat_enabled=False,
     )
     c = sheets.SheetsClient(cfg)
@@ -75,10 +75,17 @@ def master_row(kode, mk, dosen, rombel, sks, zoom_no, ket=""):
 
 
 # Backup cols: [4]Kode [5]MK [6]Dosen [7]Ruang/RomBel [8]Pengganti [9]Catatan
+def _mon_text() -> str:
+    """'Senin, <tanggal minggu berjalan>' — fixture harus lolos week-window
+    filter _fetch_backup_classes (backup basi tidak dikembalikan)."""
+    mon, _ = sheets.week_span_wib()
+    return f"Senin, {mon.day} {sheets.ID_MONTHS_INV[f'{mon.month:02d}']} {mon.year}"
+
+
 def backup_row(kode, room, pengganti, catatan=""):
     r = [""] * 10
     r[0], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9] = (
-        "Fasil A", "Senin, 8 September 2026", "13.00 - 15.30", kode, "Algo", "Dosen X",
+        "Fasil A", _mon_text(), "13.00 - 15.30", kode, "Algo", "Dosen X",
         room, pengganti, catatan)
     return r
 
