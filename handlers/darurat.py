@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -12,9 +11,14 @@ from config import BASE_DIR, Config
 
 log = logging.getLogger(__name__)
 
-ADMIN_ID = 2061872254
+_ADMIN_ID_DEFAULT = 2061872254
 
 DARURAT_FILE = BASE_DIR / "data" / "darurat.json"
+
+def _admin_ids(context) -> tuple[int, ...]:
+    """Admin ids: cfg.admin_ids (env ADMIN_IDS) bila ada, else default aman."""
+    cfg = context.bot_data.get("cfg") if getattr(context, "bot_data", None) else None
+    return getattr(cfg, "admin_ids", None) or (_ADMIN_ID_DEFAULT,)
 
 def is_darurat() -> bool:
     try:
@@ -31,7 +35,8 @@ async def darurat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     uid = getattr(u, "id", None)
     uname = getattr(u, "username", None)
     cid = getattr(c, "id", None)
-    if uid != ADMIN_ID and cid != ADMIN_ID:
+    admin_ids = _admin_ids(context)
+    if uid not in admin_ids and cid not in admin_ids:
         log.warning("darurat denied chat=%s user=%s (@%s)", cid, uid, uname)
         await update.message.reply_text("⛔ Hanya admin bisa pakai /darurat.")
         return

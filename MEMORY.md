@@ -1,7 +1,7 @@
 # MEMORY — telegram-sheets-bot (TelefasilBot)
 
 > Per-project memory. Read at cold session start. Append-only.
-> Updated: 2026-09-21 (fix /schedule backup basi window Senin-Minggu, BELUM commit; hybrid picker juga BELUM commit)
+> Updated: 2026-09-26 (backup fix delegasi PPC01 + week filter **SHIPPED ead798d**; dirty: backup.py/cancel.py/register.py/sinkron.py/PDF PPC01; deploy MANUAL belum diklik)
 
 ## What
 Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, rekap kehadiran, backup, cancel kelas langsung ke Google Sheets. Multi-user (satu bot, tiap fasil lihat jadwal sendiri). Bot: [@telefasil_bot](https://t.me/telefasil_bot).
@@ -568,3 +568,86 @@ Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, 
 - **REVIEW:** **APPROVED.**
 - **NEXT (user):** commit → hash jadi ID entri → Railway Deploy Latest Commit → tes `/schedule` live (backup basi hilang, yang dalam window tampil, "← HARI INI" tetap).
 - **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-21] /tukar jadwal fasil TANPA approval � swap tab + first-wins + S2 date-compare + S3 cancel atomik + S4 (BELUM commit)
+- **Fitur:** /tukar (catat duluan menang, tanpa approval � sepakati via WA), pola sekali/tetap/jam, /tukar_batal <id> (pencatat/admin), /tukar_riwayat, /tukar_admin (batal/hapus, admin).
+- **Storage:** tab baru "Tukar Jadwal" (A..K) di spreadsheet master � dibuat otomatis; master/backup/cancel TIDAK disentuh. Env TUKAR_SHEET_NAME.
+- **Read:** get_classes merge swap dulu (sekali/jam date-scoped auto-balik setelah tanggal lewat; tetap = pemilik permanen) � jadwal/zoom/rekap/absen/cancel ikut. Fail-open: tab tak ada = kelas normal.
+- **Jaga:** for_chat lock saat tulis, _run single-flight = conflict check + write atomic (rebutan aman), allow_reentry=True, html.escape, WIB (datetime.now(sheets.WIB)), _classes_cache.clear() tiap tulis swap.
+- **S2 date-compare (sheets.py):** `_parse_tanggal` (dd/mm/yyyy → `date`; invalid 31/02 → None; sampah → None) — `_merged_classes._sw_still_active` + verify pakai DATE bukan string. Binasa bug string-compare: "6/9/2020" vs "25/9/2020" — `'6/' > '2/'` string TRUE → kelas lama tak balik; date benar balik. `_norm_tanggal` tetap utk normalisasi display/konflik (scale 2-digit).
+- **S3 cancel atomik (sheets.py L1651):** `cancel_swap_owned(row_id, by, is_admin)` — lookup + otorisasi (pencatat ATAU admin) + soft-cancel DALAM SATU `_run` (bebas TOCTOU race). Return tuple: (1, owner) ok, (0, "") id tak ada, (-1, owner) sudah BATAL, (-2, owner) bukan pencatat/admin. Dipakai /tukar_batal (handlers/tukar.py L330). `_cancel_swap` lama utk admin (hard=True → batch_clear, riwayat dihapus).
+- **S4 typo/dedupe konvensi:** (1) kolom B header tulis "Dicatat" bkn "Dicatat oleh" miring (SWAP_OLAH = Dicatat oleh) — map `_swap_records` konsisten; (2) dedupe insert row: `_append_swap` pilih baris kosong pertama di bawah header (skip baris terisi) → no-dobel-progress; (3) `_swap_records` skip baris tanpa No ATAU Kode saya (header/baris kosong tak ikut).
+- **Verif:** `py verify_tukar.py` = **43/43 PASS** (18 kasus inti + 6b S2: parse tanggal, tidak-default-pad 6/9/2020 & 6/9/2099 aktif; 6c S3: cancel_swap_owned 5 kasus owner/admin/none; 7 hygiene: allow_reentry, for_chat, WIB, html.escape, _merged_classes di get_classes). compileall OK; regresi verify_rekap_swap/html_escape/zoom_hybrid/rekap_refresh/schedule_window lolos. BELUM commit � hash nanti. Railway deploy MANUAL selalu.
+
+## [2026-09-23] Fix SKS sesi gabungan — sks×len + repair baris lama jelas-single (BELUM commit)
+> **Semua untuk pertemuan gabungan ("3 dan 4" = 2 sesi):** SKS tercatat = SKS dasar, padahal konvensi sheet = SKS × jumlah sesi. JANGAN deploy/jalankan bot — kode + verify offline saja. BELUM commit — hash nanti.
+
+- **FIX `handlers/rekap.py`:** helper baru `_sks_efektif(sks, meeting)` dipakai di `_build_base` — meeting dengan >=2 angka (regex `\d+`) → `sks = int(sks) * len(nums)`; digit guard: SKS bukan angka murni (`re.fullmatch(r"\d+"...)`) ATAU meeting single → biarkan nilai lama apa adanya. Semua jalur `_build_base` ikut benar: ➕ baru, 🧩 fix (prefill), submit, nama file bukti.
+- **verify_zoom_picker.py L302:** assert `rec.sks == "2"` → `"4"` (meeting "3 dan 4", sks dasar 2 → 4). `class_from_zoom.sks` (ClassEntry sintetis) TETAP "2" — multiplikasi hanya di RekapRecord.
+- **`repair_rekap_sks_gabungan.py` (BARU):** repair baris rekap LAMA kolom H (SKS). Jelas-single: `H == sks dasar Zoom Record J` (satu-satunya nilai utk kode itu di SEMUA baris Zoom, col F=kode col J=sks) DAN pertemuan G >=2 angka → `H = int(H) * len(nums)`. Ambigu (zoom tak ketemu / H!=J / single / H bukan digit) → SKIP & lapor. Mode dry-run (default) / `--write` / `--all-tabs` / `--selftest`; reuse `_retry`, `_collect_tabs`, `_commit_hash` dari `repair_rekap_jam.py`; SAFEGUARD: cuma kolom H, cap 200, skip _SYSTEM_TABS.
+- **_refresh_os / absen / feedback / schedule / laporan TIDAK disentuh.**
+- **VERIFIKASI:** `py -m compileall -q .` OK; `py verify_zoom_picker.py` **22/22 PASS**; `py repair_rekap_sks_gabungan.py --selftest` **OK** (kandidat gabungan+digit, jelas→×len, ambigu→None 5 kasus, zoom map, hash).
+- **REVIEW (update sesi berikutnya):** **APPROVED** — S3 tunggal: **verify-loop acceptable one-time** (loop verifikasi penuh tool repair tak jadi permanent gate; repair sekali utk baris lama — cukup `--selftest` + dry-run + review rencana). BELUM commit — hash nanti.
+- **NEXT (user):** koordinasikan jadwal nonaktif dulu (repair tulis langsung ke sheet) → commit → Railway Deploy Latest Commit → jalankan repair `py repair_rekap_sks_gabungan.py` (dry-run dulu, lalu `--write` kalau rencana benar) → tes /rekap live pertemuan gabungan baru (SKS tampil ×sesi).
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-23] Absen sekali-gabungan — parse "3 dan 4"/"3-4" + tulis dua kolom + confirm marker (BELUM commit)
+> **BELUM commit** — hash belum ada. Setelah commit, isi hash + SHIPPED. Railway deploy MANUAL selalu (auto-deploy off). Review **APPROVED**.
+
+- **ISI — absen pertemuan gabungan SEKALI tulis dua kolom:** pertemuan `"3 dan 4"` / `"3-4"` (2 sesi) → 1x absen tulis/tandai **KEDUA kolom pertemuan** di sheet absen (bukan cuma kolom pertama).
+- **Parse format gabungan:** word `dan` + dash `-` (keduanya didukung).
+- **Confirm marker** tampil utk kedua kolom.
+- **Hubungan sesi gabungan:** lanjutan konvensi [2026-09-23] Fix SKS sesi gabungan (rekap, `_sks_efektif`) — sekarang sisi absen menulis ke semua kolom pertemuan match.
+- **VERIFIKASI:** **23+16 PASS** (kasus gabungan + regresi; offline, tanpa creds). compileall OK.
+- **REVIEW: APPROVED** — 2 S3 sanitasi follow-up (non-blocking).
+- **NEXT (user):** commit → hash jadi ID entri → Railway Deploy Latest Commit → tes /absen live pertemuan gabungan (kedua kolom terisi + marker confirm).
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-23] Rule SKS: CDC*/AsDs* ikut master (tanpa ×) — repair skip kode itu (BELUM commit)
+> **BELUM commit** — hash belum ada. Setelah commit, isi hash + SHIPPED. Railway deploy MANUAL selalu (auto-deploy off). Lanjutan entri [2026-09-23] Fix SKS sesi gabungan + entri di bawah (SKS ×sesi), timer.
+
+- **RULE BARU (pengecualian multiplikasi ×sesi):** kode kelas **CDC\* / AsDs\*** (case-insensitive, awalan `cdc`/`asds`) → SKS = **master apa adanya, TANPA ×jumlah pertemuan**. Kode lain tetap `sks × len(nums)` utk pertemuan gabungan ("3 dan 4" → ×2). Alasan: kelas CDC/AsDs punya SKS tetap per sesi gabungan, bukan kelipatan.
+- **`handlers/rekap.py` `_sks_efektif(sks, meeting, kode="")` (L785-795):** param `kode` BARU; guard awal `(kode or "").casefold().startswith(("cdc","asds"))` → `return sks or ""`. Digit guard lama tetap (meeting >=2 angka + SKS digit murni, selain itu biarkan). Call site `_build_base` L808: `_sks_efektif(c.sks, meeting, c.code)`.
+- **`repair_rekap_sks_gabungan.py` SKIP CDC/AsDs:**
+  - `_collect_candidates` (L68): kode casefold startswith `cdc`/`asds` → bukan kandidat (tak disentuh).
+  - `_fix_sks` (L79): CDC/AsDs → `None` (master apa adanya).
+  - `_selftest` +4 assert (L116-118): `"3 dan 4","2","CDC123"` → None; `"1 dan 2","4","AsDs2"` → None; lowercase `asds2` → None; kandidat list row 6-7 tak ikut.
+- **`verify_zoom_picker.py` blok 7b (L305-317) +4 check:** AsDs2 `"1 dan 2"` master 4 tanpa ×2; CDC123 case-insensitive → master apa adanya; kode lain (ARCH1 `"3 dan 4"` 2→4) tetap ×sesi; single/kode kosong tetap apa adanya.
+- **VERIFIKASI:** `py verify_zoom_picker.py` **26/26 PASS** (22 lama + 4 baru) + `py repair_rekap_sks_gabungan.py --selftest` **OK** + compileall OK. Offline, tanpa creds, bot TIDAK dijalankan.
+- **NEXT (user):** koordinasikan jadwal nonaktif → commit → Railway Deploy Latest Commit → jalankan `py repair_rekap_sks_gabungan.py` (dry-run dulu, lalu `--write`) → tes /rekap live pertemuan gabungan (SKS ×sesi utk kode reguler, CDC/AsDs tetap master).
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-23] DATE step /zoom — personal pilih tanggal last/next (BELUM commit)
+> **BELUM commit** — hash belum ada. Setelah commit, isi hash + SHIPPED. Railway deploy MANUAL selalu (auto-deploy off). Review **APPROVED** — 0 S1/S2/S3.
+
+- **Step DATE baru di /zoom (`handlers/log.py` pick_class L348-354, pick_date L358-368):**
+  - **Personal** (`category` bukan Backup/Make-up) + `last != nxt` → tawarkan **📅 Tanggal kelasnya?** via `_date_kb` (L301): tombol **"📅 {tanggal} · jadwal berikutnya"** (`d:next`, default / perilaku lama) dan **"📅 {tanggal} · pertemuan terakhir"** (`d:last`). Balik ke MEETING.
+  - **last == nxt** → skip DATE, langsung MEETING (default next = sama).
+  - **Backup/Make-up SKIP DATE** — tanggal eksplisit dari sheet, langsung MEETING (tanpa pertanyaan).
+  - **Override disimpan:** `context.user_data["lecture_date"]` = `next_date_for_day` / `last_date_for_day` (dd/mm/yyyy string); **di-pop tiap pick_class** (reset per pilih kelas). `_class_date` (L491) = override ?? next (default). `_build_record` pakai override → tulis kolom D sheet = tanggal user pilih.
+- **Dupe gate ikut override:** `_find_conflicts(kode, tanggal, pertemuan)` dipanggil dgn **lecture_date override** (bukan next default) — jalur `_meeting_warnings` (step meeting) + confirm `rec.lecture_date` (L605). Force-conflict (`force_conflict` one-shot, clear setelah save sukses) TIDAK berubah — override tetap berlaku.
+- **Backup tidak geser progres** (tetap dari entri hybrid picker; tak berubah sesi ini).
+- **VERIFIKASI:** `verify_log_date.py` (BARU, untracked, 18 check: DATE render last/next, skip saat equal, backup skip, pick last/next set override + return MEETING, stale → END, reset tiap pick, default next, backup eksplisit parse, build-record override, dupe-gate pakai override) + regresi **total 73/73 PASS** (verify_zoom_picker / zoom_picker_groups / zoom_display / zoom_hybrid / html_escape dkk). compileall OK. Offline tanpa creds, bot TIDAK dijalankan.
+- **NEXT (user):** commit → hash jadi ID entri → Railway Deploy Latest Commit → tes /zoom live: personal pilih "pertemuan terakhir" → tanggal D sheet = last, dupe gate cek thd tanggal itu; backup tetap tanpa pertanyaan tanggal.
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway; gambar → vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-26] Backup fix: delegasi fasil-awal PPC01 + week filter Senin-Minggu WIB SHIPPED ead798d
+> **SHIPPED** commit `ead798d` pushed `35ebf98..ead798d` (HEAD main = ead798d). Railway deploy MANUAL selalu (auto-deploy off) — **BELUM diklik**. Review **APPROVED**.
+
+- **BUG 1 — PPC01 transfer (delegasi fasil-awal):** user transfer kelas PPC01 ke pengganti; picker kelas sendiri (`_fetch_classes`) TETAP menampilkan PPC01 (kelas tak hilang), dan rekaman pengganti di Zoom Record TIDAK dianggap done utk fasil-awal (A) → dobel-dorong/input ganda.
+- **FIX (sheets.py):**
+  - **`_active_backup_keys(facilitator_name)` (L590)** — NEW: set `(kode.casefold(), dd/mm/yyyy)` dari Backup sheet di mana nama = **FASIL AWAL (col B)**, match **exact normalize** (bukan partial — review S3: partial "Ratu" bisa match "Ratu Bilqis" salah). Arah kebalikan `_fetch_backup_classes` (yg cari col I pengganti). Return SEMUA historis by design — consumer filter minggu, butuh tanggal penuh utk `_get_done_by_date`.
+  - **`_fetch_classes` (L618)** — kelas yang sedang didelegasikan (kode+tanggal minggu ini match `_active_backup_keys`) **DI-DROP** dari picker A — pengganti yang bertanggung jawab. Cek via `_class_week_date_str(day)` (last/next dalam window) lalu `(code.casefold(), dkey) in delegated`.
+  - **`_get_done_by_date` (L872)** — delegasi **dianggap DONE utk A**: record masuk kalau `col C == A` ATAU `(kode, tgl) in delegated`. **Col C Zoom Record TETAP perekam** (pengganti) — attribusi tetap, tak menimpa.
+- **BUG 2 — week leak backup:** `_fetch_backup_classes` pulangkan SEMUA backup cocok nama tanpa cek tanggal → backup basi ("Selasa 8 Sep") muncul di "Selasa 15 Sep" (lanjutan fix schedule [2026-09-21] `737b933d`).
+- **FIX week filter (Senin..Minggu WIB, window konsisten):**
+  - **`_fetch_backup_classes` (L1263)** — `week_span_wib()` (L2376) → parse `_parse_tanggal_panjang` (L2362) backup col C; di luar `[mon..sun]` → **skip**. **Fail-open:** tanggal tak ter-parse → TETAP tampil (perilaku lama dipertahankan).
+  - **`backup_date_in_week(c, today)` (L2408)** — helper publik: parse backup_hari_tanggal, None/in-window → True, di luar → False; fail-open sama. Dipakai absen picker + reminder.
+  - **`absen.py` L50** — `today_kodes` kini `sheets.backup_date_in_week(c) and c.day == today` (backup basi tak masuk "Hari Ini").
+  - **`reminder.py` L77 + L105** — reminder filter `backup_date_in_week(c)` (kelas basi tak di-remind lintas minggu).
+- **Review S3 fixed:** partial match fasil-awal → **exact** di `_active_backup_keys` (col B). Pengganti col I tetap partial (standar lama).
+- **VERIFIKASI:** `verify_backup_delegation.py` (BARU, stub no-creds) **11/11 PASS** + `verify_backup_master.py` PASS. compileall OK. Bot TIDAK dijalankan.
+- **COMMIT ead798d (files):** `sheets.py`, `handlers/reminder.py`, `handlers/absen.py`, `verify_backup_delegation.py`, `verify_backup_master.py`.
+- **Dirty unstaged (di luar fix ini, tunggu instruksi user):** MEMORY.md (file ini), `handlers/backup.py`, `cancel.py`, `register.py`, `sinkron.py`, PDF PPC01.
+- **NEXT (user):** Railway **Deploy Latest Commit** → cek ACTIVE jadi `ead798d` → tes live: fasil A /zoom → PPC01 tak muncul (sudah delegasi); pengganti log PPC01 → A tampil done; /absen + reminder backup basi tak tampil.
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); gambar → vision agent. Cavemem MCP down — append manual.

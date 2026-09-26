@@ -326,8 +326,7 @@ async def _build_class_kb(context) -> list[list[InlineKeyboardButton]]:
     for i, c in enumerate(classes):
         if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
             try:
-                from handlers.log import _parse_backup_date
-                last_cmp = _parse_backup_date(c.backup_hari_tanggal)
+                last_cmp = sheets.parse_backup_date(c.backup_hari_tanggal)
                 last_disp = c.backup_hari_tanggal
             except Exception:
                 last_cmp = last_disp = c.backup_hari_tanggal
@@ -396,8 +395,7 @@ def _tanggal_keys(context, c) -> list:
         return [zt, sheets.tanggal_panjang(zt)]
     if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
         try:
-            from handlers.log import _parse_backup_date
-            cmpd = _parse_backup_date(c.backup_hari_tanggal)
+            cmpd = sheets.parse_backup_date(c.backup_hari_tanggal)
         except Exception:
             cmpd = c.backup_hari_tanggal
         return [cmpd, c.backup_hari_tanggal.strip()]

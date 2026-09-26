@@ -69,7 +69,6 @@ async def _filter_todo(
     except sheets.SheetsError as exc:
         log.warning("Done-map failed for %s: %s", facilitator, exc)
         return mine  # fail-open: kirim semua, jangan sampai kelas terlewat
-    from handlers.log import _parse_backup_date
 
     now = sheets.today_str_wib()
     todo = []
@@ -77,7 +76,7 @@ async def _filter_todo(
         if not sheets.backup_date_in_week(c):
             continue  # backup/make-up basi lintas minggu — jangan remind
         if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
-            tgl = _parse_backup_date(c.backup_hari_tanggal)
+            tgl = sheets.parse_backup_date(c.backup_hari_tanggal)
         else:
             tgl = sheets.last_date_for_day(c.day)
         if (c.code.casefold(), tgl) not in done:

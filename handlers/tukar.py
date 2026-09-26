@@ -25,7 +25,7 @@ import usage
 import users
 from config import Config
 from handlers import status as st
-from handlers.stats import _admin_ok
+from handlers.stats import _admin_ids, _admin_ok
 
 log = logging.getLogger(__name__)
 
@@ -328,7 +328,7 @@ async def cmd_batal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     busy = await st.loading(update, context, "⏳ Membatalkan...")
     try:
         res, owner = await _sheets(context).cancel_swap_owned(
-            row_id, name, _admin_ok(uid, cid), note="batalkan by chat")
+            row_id, name, _admin_ok(uid, cid, _admin_ids(context)), note="batalkan by chat")
     except sheets.SheetsError as exc:
         await st.unbusy(busy)
         await update.effective_message.reply_text(f"⚠️ {exc}")
@@ -384,7 +384,7 @@ async def cmd_riwayat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     r = update.effective_user
     uid, cid = (r.id if r else None), update.effective_chat.id
-    if not _admin_ok(uid, cid):
+    if not _admin_ok(uid, cid, _admin_ids(context)):
         await update.effective_message.reply_text("⛔ Hanya admin.")
         return
     args = (context.args or [])

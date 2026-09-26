@@ -13,7 +13,6 @@ from telegram.ext import Application, ContextTypes
 import config
 import sheets
 import users
-from config import Config
 from handlers import heartbeat, reminder
 from handlers import register as register_handlers
 

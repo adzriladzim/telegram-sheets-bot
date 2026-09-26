@@ -260,6 +260,7 @@ def register(app: Application, cfg: Config) -> None:
         fallbacks=[CommandHandler("cancel", cancel)],
         conversation_timeout=60 * 10,
         name="register_conv",
+        allow_reentry=True,
     )
     app.add_handler(conv)
 

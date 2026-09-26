@@ -40,18 +40,17 @@ async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     by_day = sheets.this_week_classes(classes)
     today = sheets.today_day_wib()
     today_full = sheets.today_str_wib()
-    from handlers.log import _parse_backup_date
     lines = ["🗓 <b>Jadwal Kelas Minggu Ini</b> (🔄 backup · 🧪 make-up)", ""]
     for day in sheets.DAY_ORDER:
         for c in by_day.get(day, []):
             if c.category == "Make-up":
-                mark = " ← <b>HARI INI</b>" if _parse_backup_date(c.backup_hari_tanggal) == today_full else ""
+                mark = " ← <b>HARI INI</b>" if sheets.parse_backup_date(c.backup_hari_tanggal) == today_full else ""
                 lines.append(
                     f"<b>{day}</b>🧪 {html.escape(c.code)} — {html.escape(c.subject)} ({html.escape(str(c.backup_hari_tanggal))}){mark}\n"
                     f"  🏫 {html.escape(c.room)} | 👤 {html.escape(c.lecturer)} | {html.escape(c.zoom_label)}"
                 )
             elif c.category == "Backup":
-                mark = " ← <b>HARI INI</b>" if _parse_backup_date(c.backup_hari_tanggal) == today_full else ""
+                mark = " ← <b>HARI INI</b>" if sheets.parse_backup_date(c.backup_hari_tanggal) == today_full else ""
                 lines.append(
                     f"<b>{day}</b>🔄 {html.escape(c.code)} — {html.escape(c.subject)} ({html.escape(str(c.backup_hari_tanggal))}){mark}\n"
                     f"  🏫 {html.escape(c.room)} | 👤 {html.escape(c.lecturer)} | {html.escape(c.zoom_label)}"

@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import socket
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -54,9 +53,8 @@ _rekap_status_cache: dict = {}
 _rekap_tab_cache: dict = {}
 _CACHE_TTL = 120
 _feedback_cache: dict = {"rows": None, "ts": 0}
-# Feedback spreadsheet (web CSAT "Form Responses 1") — dibaca READ-ONLY.
-FEEDBACK_SS_ID = "1dZQcq3TvPh7wkW0z8SF94YExs5jONYf_O3oV09Hk604"
-FEEDBACK_TAB = "Form Responses 1"
+# Cap _chat_locks (per-chat write lock) — hindari pertumbuhan tak terbatas.
+_MAX_CHAT_LOCKS = 64
 # Kolom rating web CSAT (hasil probe live header): pemahaman r[27], interaktif
 # r[29], performa r[30]. Nilai Likert '(N) ...' / angka 1-5.
 _RATING_PAT = re.compile(r"\(\s*([1-5])\s*\)")
@@ -116,11 +114,20 @@ CNL_FASIL_MAKEUP, CNL_ZOOM_NO, CNL_ZOOM_LINK, CNL_ROOM, CNL_KET = 13, 14, 15, 16
 SWAP_NO, SWAP_DICATAT, SWAP_OLAH, SWAP_KODE_SAYA = 0, 1, 2, 3
 SWAP_TANGGAL, SWAP_DENGAN, SWAP_KODE_DIA, SWAP_POLA = 4, 5, 6, 7
 SWAP_JAM, SWAP_STATUS, SWAP_CATATAN = 8, 9, 10
-SWAP_COLS = "A:K"
 SWAP_POLA_OK = {"sekali", "tetap", "jam"}
 SWAP_STATUS_AKTIF, SWAP_STATUS_BATAL = "AKTIF", "BATAL"
 
-TIPE_KELAS_MAP = {"reguler": "Reguler", "professional": "Professional", "akselerasi": "Akselerasi", "akselerasi & professional": "Akselerasi & Professional", "professional & akselerasi": "Akselerasi & Professional", "pro": "Professional", "ae": "Akselerasi", "ae & pro": "Akselerasi & Professional", "pro & ae": "Akselerasi & Professional"}
+TIPE_KELAS_MAP = {
+    "reguler": "Reguler",
+    "professional": "Professional",
+    "akselerasi": "Akselerasi",
+    "akselerasi & professional": "Akselerasi & Professional",
+    "professional & akselerasi": "Akselerasi & Professional",
+    "pro": "Professional",
+    "ae": "Akselerasi",
+    "ae & pro": "Akselerasi & Professional",
+    "pro & ae": "Akselerasi & Professional",
+}
 DAY_ORDER = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
 
 # Chars illegal in Google Drive filenames (plus '_' — reserved as our separator).
@@ -414,16 +421,47 @@ def last_date_for_day(day_name: str) -> str:
     return (today - timedelta(days=delta)).strftime("%d/%m/%Y")
 
 
+def _norm_date_str(s: str) -> str:
+    """'Senin, 8 September 2026' atau '08/09/2026' -> '08/09/2026'.
+    Tak cocok -> string asli (tanpa fallback)."""
+    s = s.strip()
+    if re.match(r"\d{2}/\d{2}/\d{4}", s):
+        return s
+    m = re.search(r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})", s)
+    if m:
+        d, mon, y = m.group(1), m.group(2).lower(), m.group(3)
+        return f"{int(d):02d}/{ID_MONTHS.get(mon, '01')}/{y}"
+    return s
+
+
+def parse_backup_date(s: str) -> str:
+    """'Senin, 8 September 2026' -> '08/09/2026'. dd/mm/yyyy pass-through.
+    Tak bisa parse: log.warning + today sebagai fallback (bukan silent)."""
+    stripped = (s or "").strip()
+    out = _norm_date_str(stripped)
+    if out != stripped or re.match(r"\d{2}/\d{2}/\d{4}", stripped):
+        return out
+    log.warning("parse_backup_date: tak bisa parse %r — pakai today", s)
+    return today_str_wib()
+
+
+def class_done_key(c: ClassEntry) -> tuple[str, str]:
+    """(kode.casefold(), dd/mm/yyyy) — konvensi SAMA dgn done_by_date sheets."""
+    if c.category in ("Backup", "Make-up"):
+        if c.backup_hari_tanggal:
+            return (c.code.casefold(), parse_backup_date(c.backup_hari_tanggal))
+        return (c.code.casefold(), "")
+    return (c.code.casefold(), last_date_for_day(c.day))
+
+
 class SheetsClient:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
         self._gc: gspread.Client | None = None
         self._lock = asyncio.Lock()  # single-flight for ALL gspread I/O
         self._chat_locks: dict[int, asyncio.Lock] = {}
-        # Safety net (jaring terakhir): global socket default so any Google call
-        # that misses its explicit per-client timeout can't block a thread
-        # forever. Explicit timeouts are also set below (gspread/Drive).
-        socket.setdefaulttimeout(30)
+        # Timeout ditangani per-client: _client() set_timeout((10, 30)) — tidak
+        # perlu socket default global (memicu side-effect proses-wide).
 
     # ---------- sync internals ----------
 
@@ -543,9 +581,33 @@ class SheetsClient:
     async def for_chat(self, chat_id: int):
         """Per-chat async lock — serializes a chat's gspread-write handlers under
         concurrent_updates=True so double-taps can't interleave or double-write."""
+        self._prune_chat_locks()
         lock = self._chat_locks.setdefault(chat_id, asyncio.Lock())
         async with lock:
             yield
+        self._prune_chat_locks()
+
+    def _prune_chat_locks(self) -> None:
+        """Bounded _chat_locks: di atas ambang, pop lock yang tidak sedang dipegang."""
+        if len(self._chat_locks) <= _MAX_CHAT_LOCKS:
+            return
+        free = [k for k, l in self._chat_locks.items() if not l.locked()]
+        for k in free:
+            self._chat_locks.pop(k, None)
+
+    def _evict_classes(self, *names: str) -> None:
+        """Evict _classes_cache per-fasil (bukan global clear): hanya fasil yang
+        ownership/delegasinya berubah yang wajib refetch."""
+        for n in names:
+            if n:
+                _classes_cache.pop(self._normalize(n), None)
+
+    @staticmethod
+    def _swap_fasil_names(vals: list) -> tuple[str, str]:
+        """Fasil yang terlibat satu baris Tukar (Dicatat oleh + Tukar dengan)."""
+        oleh = vals[SWAP_OLAH].strip() if len(vals) > SWAP_OLAH else ""
+        dengan = vals[SWAP_DENGAN].strip() if len(vals) > SWAP_DENGAN else ""
+        return oleh, dengan
 
     def _sheet(self, title: str) -> gspread.Worksheet:
         return self._sheet_in(self.cfg.sheet_id, title)
@@ -856,18 +918,7 @@ class SheetsClient:
 
     def _norm_date(self, s: str) -> str:
         """Normalize 'Senin, 8 September 2026' or '08/09/2026' -> '08/09/2026'."""
-        import re
-        s = s.strip()
-        # Already dd/mm/yyyy
-        if re.match(r"\d{2}/\d{2}/\d{4}", s):
-            return s
-        m = re.search(r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})", s)
-        if m:
-            d, mon, y = m.group(1), m.group(2).lower(), m.group(3)
-            months = {"januari":"01","februari":"02","maret":"03","april":"04","mei":"05","juni":"06","juli":"07","agustus":"08","september":"09","oktober":"10","november":"11","desember":"12"}
-            mm = months.get(mon, "01")
-            return f"{int(d):02d}/{mm}/{y}"
-        return s
+        return _norm_date_str(s)
 
     def _get_done_by_date(self, facilitator_name: str) -> set[tuple[str, str]]:
         """Set of (kode, tanggal_kelas) already in Zoom Record — for daily check (gabung: 1 entry cover 2 sesi)."""
@@ -1437,7 +1488,7 @@ class SheetsClient:
         self._guard_grid(ws, ["J"], insert_row)
         ws.update(f"B{insert_row}:J{insert_row}", [row_data], value_input_option="USER_ENTERED")
         self._invalidate_rows(self.cfg.sheet_id, self.cfg.backup_sheet)
-        _classes_cache.clear()  # delegasi baru: kelas A harus langsung hilang dari picker
+        self._evict_classes(rec.facilitator_awal, rec.pengganti)  # delegasi baru: picker A & pengganti berubah
         log.info("Wrote backup %s/%s at row %d", rec.kode, rec.hari_tanggal, insert_row)
         return ws.row_count
 
@@ -1578,7 +1629,7 @@ class SheetsClient:
         self._guard_grid(ws, ["K"], insert_row)
         ws.update(f"A{insert_row}:K{insert_row}", [rec.as_row()], value_input_option="USER_ENTERED")
         self._invalidate_rows(self.cfg.sheet_id, self.cfg.tukar_sheet)
-        _classes_cache.clear()  # ownership may change for BOTH fasil
+        self._evict_classes(rec.oleh, rec.dengan)  # ownership may change for BOTH fasil
         log.info("Swap #%s: %s gives %s <-> %s (%s, %s)", no, rec.oleh, rec.kode_saya,
                  rec.kode_dia, rec.pola, rec.tanggal or "tetap")
         return no
@@ -1602,7 +1653,7 @@ class SheetsClient:
             self._guard_grid(ws, ["K"], row_idx)
             ws.batch_clear([f"A{row_idx}:K{row_idx}"])
             self._invalidate_rows(self.cfg.sheet_id, self.cfg.tukar_sheet)
-            _classes_cache.clear()
+            self._evict_classes(*self._swap_fasil_names(vals))
             log.info("Swap #%s hard-delete oleh %s", row_id, by)
             return 1
         old_status = vals[SWAP_STATUS].strip() if len(vals) > SWAP_STATUS else ""
@@ -1613,7 +1664,7 @@ class SheetsClient:
         ws.update(f"J{row_idx}", [[SWAP_STATUS_BATAL]], value_input_option="USER_ENTERED")
         ws.update(f"K{row_idx}", [[catatan]], value_input_option="USER_ENTERED")
         self._invalidate_rows(self.cfg.sheet_id, self.cfg.tukar_sheet)
-        _classes_cache.clear()
+        self._evict_classes(*self._swap_fasil_names(vals))
         log.info("Swap #%s batal oleh %s (%s)", row_id, by, note or "-")
         return 1
 
@@ -2022,8 +2073,8 @@ class SheetsClient:
         import time
         now = time.time()
         if _feedback_cache["rows"] is None or now - _feedback_cache["ts"] > 600:
-            ss = self._client().open_by_key(FEEDBACK_SS_ID)
-            _feedback_cache["rows"] = ss.worksheet(FEEDBACK_TAB).get_all_values()
+            ss = self._client().open_by_key(self.cfg.feedback_ss_id)
+            _feedback_cache["rows"] = ss.worksheet(self.cfg.feedback_tab).get_all_values()
             _feedback_cache["ts"] = now
         rows = _feedback_cache["rows"]
         kc = kode.strip().casefold()

@@ -154,7 +154,7 @@ async def pick_kode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def enter_kode_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     kode = update.message.text.strip()
     context.user_data["absen_kode"] = kode
-    await update.effective_message.reply_text(f"Kode: {kode}\n2️⃣ Pertemuan ke-? (1-16 · gabungan: 3 dan 4 / 3-4)", reply_markup=_pertemuan_prompt_kb())
+    await update.effective_message.reply_text(f"Kode: {html.escape(kode)}\n2️⃣ Pertemuan ke-? (1-16 · gabungan: 3 dan 4 / 3-4)", reply_markup=_pertemuan_prompt_kb())
     return PERTEMUAN
 
 async def enter_pertemuan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

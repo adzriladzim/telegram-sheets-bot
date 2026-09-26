@@ -171,5 +171,6 @@ def register(app: Application, cfg: Config) -> None:
         fallbacks=[CommandHandler("cancel", cancel)],
         conversation_timeout=_TIMEOUT,
         name="sinkron_conv",
+        allow_reentry=True,
     )
     app.add_handler(conv)

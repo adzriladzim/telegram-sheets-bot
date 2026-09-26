@@ -31,6 +31,8 @@ import users
 
 log = logging.getLogger(__name__)
 
+# Default admin id (uid ATAU chat id) — sama dgn config.py default ADMIN_IDS.
+# Gambar: admin diambil dari cfg.admin_ids (env ADMIN_IDS, comma-separated).
 ADMIN_ID = 2061872254
 
 ACT_LABEL = {"zoom": "log", "absen": "absen", "rekap": "rekap",
@@ -135,7 +137,6 @@ def _activity_bars(data: list[dict]) -> list[str]:
 async def _weekly_sections(sc, names: list[str]) -> tuple[list, list]:
     """(matriks, arrears). matriks: (name, [(kode, log_mark, rekap_mark)]).
     arrears: (name, cls, label, pn, cmpd_ddmmyyyy)."""
-    from handlers.log import _parse_backup_date
     matriks: list = []
     arrears: list = []
     today = datetime.now(sheets.WIB).date()
@@ -158,7 +159,7 @@ async def _weekly_sections(sc, names: list[str]) -> tuple[list, list]:
         row = []
         for c in classes:
             if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
-                cmpd = _parse_backup_date(c.backup_hari_tanggal)
+                cmpd = sheets.parse_backup_date(c.backup_hari_tanggal)
             else:
                 cmpd = sheets.next_date_for_day(c.day)
             key = (c.code.casefold(), cmpd)
@@ -450,9 +451,15 @@ def _actor(update: Update) -> tuple:
     return (getattr(u, "id", None), getattr(u, "username", None), getattr(c, "id", None))
 
 
-def _admin_ok(uid, cid) -> bool:
+def _admin_ids(context) -> tuple[int, ...]:
+    """Admin ids: cfg.admin_ids (env ADMIN_IDS) bila ada, else ADMIN_ID default."""
+    cfg = context.bot_data.get("cfg") if getattr(context, "bot_data", None) else None
+    return getattr(cfg, "admin_ids", None) or (ADMIN_ID,)
+
+
+def _admin_ok(uid, cid, admin_ids: tuple[int, ...]) -> bool:
     """Admin = effective_user admin ATAU chat admin (private admin chat)."""
-    return uid == ADMIN_ID or cid == ADMIN_ID
+    return uid in admin_ids or cid in admin_ids
 
 
 def _mode_from_cb(cb: str | None) -> str | None:
@@ -503,10 +510,12 @@ async def _generate_report(mode: str, days: int,
     sc = context.bot_data["sheets"]
     matriks: list = []
     arrears: list = []
+    tunggakan_ok = True
     try:
         matriks, arrears = await _weekly_sections(sc, names)
-    except Exception:
-        pass
+    except Exception as exc:
+        tunggakan_ok = False
+        log.warning("stats: tunggakan tak bisa dimuat (%s) — laporan lanjut tanpa blok tsb", exc)
     cov: dict | None = None
     try:
         cov = await sc.absen_coverage()
@@ -514,13 +523,17 @@ async def _generate_report(mode: str, days: int,
         cov = None
 
     if mode == "ringkas":
-        return _build_summary(names, data, pdata, days, per_menu, per_user, last_ts,
+        lines = _build_summary(names, data, pdata, days, per_menu, per_user, last_ts,
+                               matriks, arrears, cov)
+    elif mode == "ringan":
+        lines = _build_light(names, data, pdata, days, per_menu, per_user, last_ts,
+                             matriks, arrears, cov)
+    else:
+        lines = _build_detail(names, data, pdata, days, per_menu, per_user, last_ts,
                               matriks, arrears, cov)
-    if mode == "ringan":
-        return _build_light(names, data, pdata, days, per_menu, per_user, last_ts,
-                            matriks, arrears, cov)
-    return _build_detail(names, data, pdata, days, per_menu, per_user, last_ts,
-                         matriks, arrears, cov)
+    if not tunggakan_ok:
+        lines.insert(1, "⚠️ <i>statistik tunggakan gagal dimuat</i>")
+    return lines
 
 
 async def _send_report(reply_text, lines: list[str], mode: str) -> None:
@@ -536,7 +549,7 @@ async def _send_report(reply_text, lines: list[str], mode: str) -> None:
 
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     uid, uname, cid = _actor(update)
-    if not _admin_ok(uid, cid):
+    if not _admin_ok(uid, cid, _admin_ids(context)):
         log.warning("stats denied chat=%s user=%s (@%s)", cid, uid, uname)
         await update.message.reply_text("⛔ Hanya admin bisa lihat stats.")
         return
@@ -562,7 +575,7 @@ async def stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     q = update.callback_query
     await q.answer()
     uid, uname, cid = _actor(update)
-    if not _admin_ok(uid, cid):
+    if not _admin_ok(uid, cid, _admin_ids(context)):
         log.warning("stats denied chat=%s user=%s (@%s)", cid, uid, uname)
         await q.answer("⛔ Hanya admin bisa lihat stats.", show_alert=True)
         return

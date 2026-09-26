@@ -31,6 +31,28 @@ _TIMEOUT = 60 * 60  # 1 hour
 
 _SKIP_FILTER = filters.TEXT & ~filters.COMMAND
 
+# Set di register() — referensi ConversationHandler utk guard re-trigger.
+LOG_CONV: "ConversationHandler | None" = None
+
+
+def _active_log_state(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    """State int kalau konversasi /log chat ini sedang aktif, else None.
+    Dipakai cmd_log: re-trigger /zoom saat form jalan tidak boleh reset
+    user_data diam-diam — minta /cancel dulu."""
+    if LOG_CONV is None:
+        return None
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    user_id = update.effective_user.id if update.effective_user else None
+    if chat_id is None or user_id is None:
+        return None
+    try:
+        state = LOG_CONV._conversations.get((chat_id, user_id))
+    except Exception:
+        return None
+    if state is None or state in (ConversationHandler.END, ConversationHandler.TIMEOUT):
+        return None
+    return state
+
 
 def _sheets(context: ContextTypes.DEFAULT_TYPE) -> sheets.SheetsClient:
     return context.bot_data["sheets"]
@@ -56,22 +78,13 @@ def _week_span(today=None):
     return mon.date(), (mon + timedelta(days=6)).date()
 
 
-def _class_done_key(c: sheets.ClassEntry) -> tuple[str, str]:
-    """(kode.casefold(), dd/mm/yyyy) — konvensi SAMA dgn done_by_date sheets."""
-    if c.category in ("Backup", "Make-up"):
-        if c.backup_hari_tanggal:
-            return (c.code.casefold(), _parse_backup_date(c.backup_hari_tanggal))
-        return (c.code.casefold(), "")
-    return (c.code.casefold(), sheets.last_date_for_day(c.day))
-
-
 def _class_week_date(c: sheets.ClassEntry, mon, sun):
     """Tanggal kelas yg jatuh di minggu ini (date) atau None.
     Personal: last hari dalam minggu; jika last < Senin tapi next masih
     di minggu ini -> jadwal mendatang (next). Backup/Make-up: tanggal eksplisit."""
     if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
         try:
-            d = _dmy_to_date(_parse_backup_date(c.backup_hari_tanggal))
+            d = _dmy_to_date(sheets.parse_backup_date(c.backup_hari_tanggal))
         except Exception:
             return None
         return d if mon <= d <= sun else None
@@ -91,7 +104,7 @@ def _class_sort_date(c: sheets.ClassEntry) -> date:
     """Tanggal rujukan utk urut lama->baru dalam grup."""
     if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
         try:
-            return _dmy_to_date(_parse_backup_date(c.backup_hari_tanggal))
+            return _dmy_to_date(sheets.parse_backup_date(c.backup_hari_tanggal))
         except Exception:
             return date.max
     try:
@@ -108,7 +121,7 @@ def _group_picker_classes(classes: list[sheets.ClassEntry], done_by_date: set, t
     arrears: list[sheets.ClassEntry] = []
     done: list[sheets.ClassEntry] = []
     for c in classes:
-        if _class_done_key(c) in done_by_date:
+        if sheets.class_done_key(c) in done_by_date:
             done.append(c)
             continue
         wd = _class_week_date(c, mon, sun)
@@ -124,7 +137,7 @@ def _group_picker_classes(classes: list[sheets.ClassEntry], done_by_date: set, t
 
 def _class_label(c: sheets.ClassEntry, done_by_date: set) -> str:
     """Label lama: {✅}🔄/🧪 kode — matkul (tgl)."""
-    prefix = "✅ " if _class_done_key(c) in done_by_date else ""
+    prefix = "✅ " if sheets.class_done_key(c) in done_by_date else ""
     if c.category == "Backup":
         return f"{prefix}🔄 {c.code} — {c.subject} ({c.backup_hari_tanggal})"
     if c.category == "Make-up":
@@ -169,6 +182,14 @@ async def cmd_log(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     from telegram.constants import ChatAction
     if update.callback_query:
         await update.callback_query.answer()
+    # Re-trigger mid-conversation (/zoom saat form jalan) sampai sini via
+    # fallback atau entry point (allow_reentry=True) — JANGAN reset user_data
+    # diam-diam. Bilang /cancel dulu; konversasi tetap di state sekarang.
+    state = _active_log_state(update, context)
+    if state is not None:
+        await update.effective_message.reply_text(
+            "Form /log masih berjalan — ketik /cancel dulu untuk memulai ulang.")
+        return state
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     facilitator = users.get(update.effective_chat.id)
     if not facilitator:
@@ -471,23 +492,12 @@ async def skip_note_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 # ---------- step 6: confirm ----------
 
-def _parse_backup_date(s: str) -> str:
-    """'Senin, 8 September 2026' -> '08/09/2026'."""
-    m = re.search(r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})", s)
-    if not m:
-        return sheets.today_str_wib()
-    d, mon, y = m.group(1), m.group(2).lower(), m.group(3)
-    months = {"januari": "01", "februari": "02", "maret": "03", "april": "04", "mei": "05", "juni": "06", "juli": "07", "agustus": "08", "september": "09", "oktober": "10", "november": "11", "desember": "12"}
-    mm = months.get(mon, "01")
-    return f"{int(d):02d}/{mm}/{y}"
-
-
 def _class_date(context: ContextTypes.DEFAULT_TYPE, c: sheets.ClassEntry) -> str:
     """Tanggal kelas (dd/mm/yyyy) — key dupe gate + link ke pertemuan.
     Backup/make-up pakai Hari/Tanggal eksplisit; personal pakai pilihan user
     (default jadwal berikutnya)."""
     if c.category in ("Backup", "Make-up") and c.backup_hari_tanggal:
-        return _parse_backup_date(c.backup_hari_tanggal)
+        return sheets.parse_backup_date(c.backup_hari_tanggal)
     return context.user_data.get("lecture_date") or sheets.next_date_for_day(c.day)
 
 
@@ -668,6 +678,7 @@ async def timeout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 def register(app: Application, cfg: Config) -> None:
+    global LOG_CONV
     conv = ConversationHandler(
         entry_points=[CommandHandler(["log", "zoom", "zoom_record"], cmd_log),
                       CallbackQueryHandler(cmd_log, pattern=r"^go:log$")],
@@ -695,4 +706,5 @@ def register(app: Application, cfg: Config) -> None:
         name="log_conv",
         allow_reentry=True,
     )
+    LOG_CONV = conv
     app.add_handler(conv)
