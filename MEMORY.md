@@ -1,7 +1,7 @@
 # MEMORY — telegram-sheets-bot (TelefasilBot)
 
 > Per-project memory. Read at cold session start. Append-only.
-> Updated: 2026-09-26 (backup fix delegasi PPC01 + week filter **SHIPPED ead798d**; dirty: backup.py/cancel.py/register.py/sinkron.py/PDF PPC01; deploy MANUAL belum diklik)
+> Updated: 2026-09-26 (audit menyeluruh S2-S4 **SHIPPED 7525ddc**, pushed ead798d..7525ddc; verify*.py pindah ke scripts/verify/; deploy MANUAL belum diklik → ACTIVE harus 7525ddc)
 
 ## What
 Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, rekap kehadiran, backup, cancel kelas langsung ke Google Sheets. Multi-user (satu bot, tiap fasil lihat jadwal sendiri). Bot: [@telefasil_bot](https://t.me/telefasil_bot).
@@ -651,3 +651,51 @@ Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, 
 - **Dirty unstaged (di luar fix ini, tunggu instruksi user):** MEMORY.md (file ini), `handlers/backup.py`, `cancel.py`, `register.py`, `sinkron.py`, PDF PPC01.
 - **NEXT (user):** Railway **Deploy Latest Commit** → cek ACTIVE jadi `ead798d` → tes live: fasil A /zoom → PPC01 tak muncul (sudah delegasi); pengganti log PPC01 → A tampil done; /absen + reminder backup basi tak tampil.
 - **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); gambar → vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-26] Audit menyeluruh S2-S4 — semua temuan fixed SHIPPED 7525ddc
+> **SHIPPED** commit `7525ddc` pushed `ead798d..7525ddc` (HEAD main = 7525ddc). Railway deploy MANUAL selalu (auto-deploy off) — **BELUM diklik → ACTIVE harus jadi 7525ddc**. Review **APPROVED** (1 S2 blocker fix).
+
+- **S2 (security/robustness):**
+  - `_prune_chat_locks` baru di sheets.py — cap `_MAX_CHAT_LOCKS=64`, lock per-chat dihapus saat tak terpakai (cegah leak memori unbounded pada instance panjang).
+  - FEEDBACK_SS_ID / FEEDBACK_TAB → pindah ke config env (bukan hardcode).
+  - `/zoom` LOG_CONV guard: `cmd_log` prompt `/cancel` kalau conversation aktif; `_active_log_state` akses PTB private API dibungkus try/except (warn, bukan crash).
+  - absen: input user di-`html.escape`.
+- **S3:**
+  - `_evict_classes` → per-fasil (evict cache kelas hanya pemiliknya, bukan global clear — kinerja + isolasi).
+  - stats: silent except → `log.warning` + baris warning di output (konsumen tahu ada data dilewati).
+  - BUANG `socket.setdefaulttimeout` (lapisan tak terkendali, timeout ganda konflik dengan gspread set_timeout).
+  - ADMIN_ID → config `admin_ids` env (stats/tukar/darurat guard baca dari config, satu sumber).
+  - `parse_backup_date` + `class_done_key` di-shared ke sheets.py (5 caller); **fix latent bug dd/mm pass-through** (format tanggal dilewatkan apa adanya) + warn fallback saat unparseable.
+  - SWAP_COLS dihapus (dead).
+  - TIPE_KELAS_MAP → definisi multiline (baca).
+  - `_norm_date_str` pakai `ID_MONTHS` (bulan Indonesia, konsisten parser lain).
+- **S4 (cleanup):**
+  - Hanya **2 dead import real**: bot.py `Config`, darurat.py `Path`. Audit "33 dead" yang direport STALE — false-positive massal, yang benar cuma 2.
+  - **35 `verify_*.py` → `scripts/verify/`** (root bersih). Bootstrap pakai `parents[2]` (scripts/verify → project root). **4 header STALE** di-arsip: tukar, 725423d, s3, stats_redesign (referensi API lama).
+- **Review fix:** blocker S2 `tukar.py _admin_ok` 2-arg → TypeError saat dipanggil 3-arg → **fix 3-arg**; darurat inline admin check → `cfg.admin_ids`.
+- **VERIFIKASI:** `verify_s2s3_audit.py` (BARU) **26/26 PASS** + regresi backup_delegation 11, reminder 22, zoom_picker 26, log_date 18 + `py -m compileall` 0 error. Offline, tanpa creds. Bot TIDAK dijalankan.
+- **Untracked skipped:** PDF CSAT PPC01 (bukan repo bot).
+- **RISIKO SISA (diterima):** `_active_log_state` pakai PTB private API → bisa break saat major upgrade (guard try/except mitigasi); `parse_backup_date` unparseable → today + warning (butuh cek tetapan fallback utk 5 caller); `verify_stats_redesign` date-rot 8 fail = PRA-ADA (bukan regresi sesi ini).
+- **COMMIT 7525ddc (files):** bot.py, config.py, sheets.py, handlers/* (log, stats, absen, tukar, darurat), scripts/verify/* (35 verify + baru), verify_s2s3_audit.py... (detail di `git show 7525ddc`).
+- **NEXT (user):** Railway **Deploy Latest Commit** → cek ACTIVE jadi `7525ddc` → tes live: `/zoom` guard LOG_CONV (prompt /cancel) + `/tukar` cancel admin (3-arg _admin_ok).
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); gambar → vision agent. Cavemem MCP down — append manual.
+
+
+## [2026-09-26] Gelombang-2 fixes — user_data collision guard + hygiene (UNCOMMITTED)
+
+> Fix 8 temuan gelombang-2 di HEAD 7525ddc. BELUM commit (sengaja). JANGAN commit tanpa review.
+
+- **Langkah 1 (user_data collision) = GUARD approach.** Dipilih atas namespace: (a) namespace prefix = ~100 key reference di log/rekap/laporan + clear() — surface regresi besar; (b) guard = 1 shared module, entry point tiap handler cek registry, duit 2 conversation aktif di chat yang sama mustahil. Semua key usage per handler dibaca dulu (log/rekap bare: classes/cls/meeting/suggest/class_kb/facilitator; absen/backup/cancel/tukar/sinkron/laporan/register sudah prefix sendiri). allow_reentry=True dipertahankan semua.
+- **handlers/_guard.py (BARU):** 
+egister_conv/state_of/active_name/guard_entry. Same-handler re-entry -> return state aktif (jangan reset form — berlaku juga rekap/absen/backup/cancel/tukar yang dulu tak punya guard); handler lain aktif -> block END + pesan /cancel.
+- **Wire entry:** log.py:196-201 (cross-handler via active_name), rekap.py:91, absen.py:30, backup.py:35, cancel.py:36, tukar.py:54, sinkron.py:47, laporan.py:126, register.py:116. Registry diisi tiap register() (log.py:719, rekap.py:1014, absen.py:489, backup.py:253, cancel.py:186, tukar.py:507, sinkron.py:186, laporan.py:649, register.py:275).
+- **usage.py:** retensi RETENTION_DAYS=90 (baris 16) — _trim_old (33) potong entri >90 hr saat log(), ts invalid/non-dict dipertahankan; _atomic_write tmp+replace (26); warn saat trim.
+- **bot.py:99:** 
+un_polling(stop_signals=(SIGINT,SIGTERM,SIGABRT)) — PTB v22 native, SIGTERM di Linux -> updater.stop + app.stop (drain update_queue + create_task = tulis sheets in-flight). Custom handler TIDAK dipakai (dobel-stop).
+- **config.py:15 DEFAULT_ADMIN_ID** satu sumber; stats.py:37 + darurat.py:14 pakai itu.
+- **requirements.txt:** bounds PTB<23, gspread<7, google-auth<3, google-api-python-client<3 (import aktual: sheets.py gspread/googleapiclient/google.oauth2).
+- **verify_s2s3_audit.py pindah root -> scripts/verify/** + bootstrap parents[2] (root file DIHAPUS).
+- **Exit code verify:** verify_stats_path crash-track -> exit(1); html_escape/reminder_slots/stats_chunks/stats_html/schedule_week_window diberi sys.exit.
+- **Verify BARU:** verify_user_data_namespace.py (13/13), verify_usage_retention.py (9/9).
+- **HASIL:** compileall 0 err; wajib: backup_delegation 11, reminder 22, zoom_picker 26, log_date 18, s2s3 26, html_escape ALL PASS, + 2 baru. 6 verify gagal = PRA-ADA terarsip (725423d/s3 Config reminder_hour, tukar swapped API, stats_redesign/zoom_display/stats_html stale+console) — bukan regresi.
+- **NEXT (user):** review file:line -> commit sendiri (JANGAN commit dari agent).

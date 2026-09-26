@@ -51,3 +51,4 @@ check_parseable(chunks)
 print("OK case3 pack: single HTML chunk")
 
 print("ALL PASS")
+sys.exit(0)

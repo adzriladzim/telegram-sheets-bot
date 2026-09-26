@@ -7,11 +7,11 @@ import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from config import BASE_DIR, Config
+from config import BASE_DIR, Config, DEFAULT_ADMIN_ID
 
 log = logging.getLogger(__name__)
 
-_ADMIN_ID_DEFAULT = 2061872254
+_ADMIN_ID_DEFAULT = DEFAULT_ADMIN_ID
 
 DARURAT_FILE = BASE_DIR / "data" / "darurat.json"
 

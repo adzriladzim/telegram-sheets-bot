@@ -38,12 +38,16 @@ import sheets
 import usage
 import users
 from config import Config, BASE_DIR
+from handlers import _guard
 
 log = logging.getLogger(__name__)
 
 CLASS, MEETING = range(2)
 _TIMEOUT = 60 * 60
 _SKIP_FILTER = filters.TEXT & ~filters.COMMAND
+
+# Set di register() — referensi conv utk guard re-entry + cross-handler (S2).
+LAPORAN_CONV = None
 
 _FONT_DIR = BASE_DIR / "fonts"
 _HEADER_BLUE = (69, 88, 208)    # #4558D0
@@ -118,6 +122,10 @@ def _pdf_filename(nama: str, kode: str) -> str:
 
 async def cmd_laporan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat_id = update.effective_chat.id
+    # S2 guard: re-entry form yg sama -> jangan reset; handler lain aktif -> blok.
+    g = await _guard.guard_entry(update, context, "laporan_conv", "laporan")
+    if g is not None:
+        return g
     try:
         if update.callback_query:
             await update.callback_query.answer()
@@ -637,3 +645,5 @@ def register(app: Application, cfg: Config) -> None:
         allow_reentry=True,
     )
     app.add_handler(conv)
+    LAPORAN_CONV = conv
+    _guard.register_conv("laporan_conv", conv)

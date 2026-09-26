@@ -10,6 +10,7 @@ from config import load_config
 import handlers.stats as stats
 
 async def main():
+    crashed = False
     cfg = load_config()
     sc = sheets.SheetsClient(cfg)
     names = sorted(users_dict().values())
@@ -36,15 +37,17 @@ async def main():
     except Exception as e:
         print("WEEKLY CRASH:", type(e).__name__, e)
         traceback.print_exc()
+        crashed = True
 
     # 3. absen coverage
+    cov = None
     try:
         cov = await sc.absen_coverage()
         print("absen_coverage ok:", len(cov), "kode")
     except Exception as e:
         print("ABSEN_COVERAGE CRASH:", type(e).__name__, e)
         traceback.print_exc()
-        cov = None
+        crashed = True
 
 # 4. build report — summary + detail
     try:
@@ -59,6 +62,8 @@ async def main():
     except Exception as e:
         print("BUILD CRASH:", type(e).__name__, e)
         traceback.print_exc()
+        crashed = True
+    return crashed
 
 def users_dict():
     import json
@@ -66,4 +71,9 @@ def users_dict():
     raw = json.loads((BASE_DIR / "data" / "users.json").read_text(encoding="utf-8"))
     return {int(k): str(v).strip() for k, v in raw.items() if str(v).strip()}
 
-asyncio.run(main())
+try:
+    crashed = asyncio.run(main())
+except Exception:
+    traceback.print_exc()
+    sys.exit(1)
+sys.exit(1 if crashed else 0)

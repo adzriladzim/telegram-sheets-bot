@@ -53,3 +53,4 @@ check("makeup besok (22 Sep, dalam window) tampil", "M-TODAY" in flat and "M-TOD
 check("personal reguler selalu tampil", "REG" in flat)
 check("backup tanggal tak bisa di-parse tetap tampil (fail-open)", "B-BAD" in flat)
 print("OK — semua check lolos")
+sys.exit(0)

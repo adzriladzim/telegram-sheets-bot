@@ -27,11 +27,15 @@ import sheets
 import usage
 import users
 from config import Config
+from handlers import _guard
 
 log = logging.getLogger(__name__)
 
 CONFIRM = 0
 _TIMEOUT = 10 * 60
+
+# Set di register() — referensi conv utk guard re-entry + cross-handler (S2).
+SINKRON_CONV = None
 
 
 def _sheets(context: ContextTypes.DEFAULT_TYPE) -> sheets.SheetsClient:
@@ -39,6 +43,10 @@ def _sheets(context: ContextTypes.DEFAULT_TYPE) -> sheets.SheetsClient:
 
 
 async def cmd_sinkron(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    # S2 guard: re-entry form yg sama -> jangan reset; handler lain aktif -> blok.
+    g = await _guard.guard_entry(update, context, "sinkron_conv", "sinkron")
+    if g is not None:
+        return g
     if not users.get(update.effective_chat.id):
         await update.effective_message.reply_text(users.UNREGISTERED_MSG)
         return ConversationHandler.END
@@ -174,3 +182,5 @@ def register(app: Application, cfg: Config) -> None:
         allow_reentry=True,
     )
     app.add_handler(conv)
+    SINKRON_CONV = conv
+    _guard.register_conv("sinkron_conv", conv)

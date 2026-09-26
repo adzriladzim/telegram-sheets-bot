@@ -10,6 +10,10 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
+# Satu-satunya sumber default admin Telegram id (uid ATAU chat id) — dipakai
+# stats.py, darurat.py, dan default cfg.admin_ids. Env ADMIN_IDS override.
+DEFAULT_ADMIN_ID = 2061872254
+
 
 class ConfigError(RuntimeError):
     pass
@@ -74,7 +78,7 @@ class Config:
     feedback_ss_id: str = "1dZQcq3TvPh7wkW0z8SF94YExs5jONYf_O3oV09Hk604"
     feedback_tab: str = "Form Responses 1"
     # Admin Telegram IDs (uid ATAU chat id) utk /stats — comma-separated env.
-    admin_ids: tuple[int, ...] = (2061872254,)
+    admin_ids: tuple[int, ...] = (DEFAULT_ADMIN_ID,)
 
     # Tab Tukar Jadwal (swap fasil, tanpa approval) — dibuat otomatis bila belum ada.
     tukar_sheet: str = "Tukar Jadwal"
@@ -139,7 +143,7 @@ def load_config() -> Config:
         darurat_online=os.getenv("DARURAT_ONLINE", "false").strip().lower() in {"1", "true", "yes"},
         feedback_ss_id=os.getenv("FEEDBACK_SS_ID", "1dZQcq3TvPh7wkW0z8SF94YExs5jONYf_O3oV09Hk604").strip(),
         feedback_tab=os.getenv("FEEDBACK_TAB", "Form Responses 1").strip(),
-        admin_ids=_int_list("ADMIN_IDS", "2061872254"),
+        admin_ids=_int_list("ADMIN_IDS", str(DEFAULT_ADMIN_ID)),
     )
     if not cfg.bot_token:
         raise ConfigError("TELEGRAM_BOT_TOKEN is empty. Copy .env.example to .env and fill it.")

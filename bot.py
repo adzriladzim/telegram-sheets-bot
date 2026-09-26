@@ -5,6 +5,7 @@ Run: python bot.py   (after .env + service_account.json are in place)
 from __future__ import annotations
 
 import logging
+import signal
 import sys
 
 from telegram import BotCommand
@@ -90,7 +91,12 @@ def main() -> None:
     register_handlers(app, cfg)
     log.info("Starting polling (%d registered user(s), default facilitator=%r)",
              len(users.registered_chat_ids()), cfg.facilitator_name)
-    app.run_polling(drop_pending_updates=True)
+    # Graceful shutdown (SIGTERM, Railway): PTB v22 `run_polling(stop_signals=...)`
+    # installs signal handlers; on SIGTERM it runs updater.stop -> app.stop ->
+    # drain update_queue + await create_task (handler in-flight, termasuk tulis
+    # sheets) sebelum exit. Jangan pakai custom handler sendiri — bakal dobel-stop.
+    # Default v22 sudah SIGINT/SIGTERM/SIGABRT di Linux; eksplisit supaya jelas.
+    app.run_polling(drop_pending_updates=True, stop_signals=(signal.SIGINT, signal.SIGTERM, signal.SIGABRT))
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ Checks:
   7. log._active_log_state: aktif -> state; none/END/TIMEOUT -> None;
      LOG_CONV None -> None (stub/verify aman)
   8. class_done_key: backup pakai eksplisit, personal pakai last_date_for_day
-Run: py verify_s2s3_audit.py
+Run: py scripts/verify/verify_s2s3_audit.py
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ import os
 import sys
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))  # project root
 sys.stdout.reconfigure(encoding="utf-8")
 
 import sheets

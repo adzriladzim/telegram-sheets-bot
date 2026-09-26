@@ -18,10 +18,14 @@ import sheets
 import users
 from config import Config
 from handlers import heartbeat, reminder
+from handlers import _guard
 
 log = logging.getLogger(__name__)
 
 NAME, = range(1)
+
+# Set di register() — referensi conv utk guard re-entry + cross-handler (S2).
+REGISTER_CONV = None
 
 USAGE = "Cara pakai: /register <nama>\nContoh: /register Adzril\n\nNama akan dicocokkan dengan data di sheet Jadwal Fasil."
 
@@ -108,6 +112,10 @@ async def _lookup_and_save(
 
 
 async def register_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    # S2 guard: re-entry form yg sama -> jangan reset; handler lain aktif -> blok.
+    g = await _guard.guard_entry(update, context, "register_conv", "register")
+    if g is not None:
+        return g
     name = " ".join(context.args or []).strip()
     if name:
         res = await _lookup_and_save(
@@ -263,6 +271,8 @@ def register(app: Application, cfg: Config) -> None:
         allow_reentry=True,
     )
     app.add_handler(conv)
+    REGISTER_CONV = conv
+    _guard.register_conv("register_conv", conv)
 
     # Jalur "cukup ketik nama aja" utk user BARU (tanpa /register). Group 1: semua
     # polling update diproses tiap group (0 = ConversationHandler, 1 = ini), jadi

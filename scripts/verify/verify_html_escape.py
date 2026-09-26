@@ -335,3 +335,4 @@ for name, fn in SIMS.items():
     print(f"OK Part B {name}: {len(out)} msg(s) parseable with hostile values")
 
 print("ALL PASS")
+sys.exit(0)

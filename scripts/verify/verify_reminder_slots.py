@@ -158,3 +158,4 @@ check("full header has count", "ada 2 kelas" in ctx.bot.sent[0][1], ctx.bot.sent
 check("full slot no todo footer", "/absen + /rekap" not in ctx.bot.sent[0][1])
 
 print(f"OK — {N} checks passed")
+sys.exit(0)

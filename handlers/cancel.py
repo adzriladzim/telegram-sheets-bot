@@ -16,11 +16,15 @@ import usage
 import users
 from config import Config
 from handlers import status as st
+from handlers import _guard
 
 log = logging.getLogger(__name__)
 
 CLASS, JADWAL, SESI, CONFIRM = range(4)
 _TIMEOUT = 60 * 60
+
+# Set di register() — referensi conv utk guard re-entry + cross-handler (S2).
+CANCEL_CONV = None
 
 def _sheets(ctx): return ctx.bot_data["sheets"]
 
@@ -28,6 +32,10 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.callback_query:
         await update.callback_query.answer()
     from telegram.constants import ChatAction
+    # S2 guard: re-entry form yg sama -> jangan reset; handler lain aktif -> blok.
+    g = await _guard.guard_entry(update, context, "cancel_conv", "cancel")
+    if g is not None:
+        return g
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     name = users.get(update.effective_chat.id)
     if not name:
@@ -174,3 +182,5 @@ def register(app: Application, cfg: Config) -> None:
         allow_reentry=True,
     )
     app.add_handler(conv)
+    CANCEL_CONV = conv
+    _guard.register_conv("cancel_conv", conv)

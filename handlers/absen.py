@@ -10,11 +10,15 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 import sheets
 import users
 from config import Config
+from handlers import _guard
 
 log = logging.getLogger(__name__)
 
 KODE, PERTEMUAN, METHOD, INPUT, CHECKLIST, STATUS, CONFIRM = range(7)
 _TIMEOUT = 60*60
+
+# Set di register() — referensi conv utk guard re-entry + cross-handler (S2).
+ABSEN_CONV = None
 
 def _sheets(ctx): return ctx.bot_data["sheets"]
 
@@ -22,6 +26,10 @@ async def cmd_absen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     from telegram.constants import ChatAction
     if update.callback_query:
         await update.callback_query.answer()
+    # S2 guard: re-entry form yg sama -> jangan reset; handler lain aktif -> blok.
+    g = await _guard.guard_entry(update, context, "absen_conv", "absen")
+    if g is not None:
+        return g
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     name = users.get(update.effective_chat.id)
     if not name:
@@ -477,3 +485,5 @@ def register(app: Application, cfg: Config) -> None:
         allow_reentry=True,
     )
     app.add_handler(conv)
+    ABSEN_CONV = conv
+    _guard.register_conv("absen_conv", conv)

@@ -22,6 +22,7 @@ import sheets
 import usage
 import users
 from config import Config
+from handlers import _guard
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +31,9 @@ _TIMEOUT = 60 * 60
 _ZOOM_PAGE = 25
 
 _SKIP_FILTER = filters.TEXT & ~filters.COMMAND
+
+# Set di register() — referensi conv utk guard re-entry + cross-handler (S2).
+REKAP_CONV: "ConversationHandler | None" = None
 
 
 def _sheets(context: ContextTypes.DEFAULT_TYPE) -> sheets.SheetsClient:
@@ -83,6 +87,12 @@ def _zoom_tipe(scheme: str) -> str:
 async def cmd_rekap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.callback_query:
         await update.callback_query.answer()
+    # S2 guard: re-entry form yg sama -> jangan reset; handler lain aktif -> blok.
+    g = await _guard.guard_entry(update, context, "rekap_conv", "rekap")
+    if g is not None:
+        if g == ConversationHandler.END:
+            return g
+        return g
     from telegram.constants import ChatAction
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     facilitator = users.get(update.effective_chat.id)
@@ -1000,6 +1010,8 @@ def register(app: Application, cfg: Config) -> None:
         allow_reentry=True,
     )
     app.add_handler(conv)
+    REKAP_CONV = conv
+    _guard.register_conv("rekap_conv", conv)
 
 
 async def back_to_rk_meeting(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

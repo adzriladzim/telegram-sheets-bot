@@ -1,7 +1,7 @@
-python-telegram-bot[job-queue]>=22.8
-gspread>=6.2.1
-google-auth>=2.27.0
-google-api-python-client>=2.0.0
+python-telegram-bot[job-queue]>=22.8,<23
+gspread>=6.2.1,<7
+google-auth>=2.27.0,<3
+google-api-python-client>=2.0.0,<3
 python-dotenv>=1.0.1
 fpdf2==2.8.8
 matplotlib==3.10.7

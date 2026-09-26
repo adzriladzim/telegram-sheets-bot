@@ -23,6 +23,7 @@ import sheets
 import usage
 import users
 from config import Config
+from handlers import _guard
 
 log = logging.getLogger(__name__)
 
@@ -190,6 +191,14 @@ async def cmd_log(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.effective_message.reply_text(
             "Form /log masih berjalan — ketik /cancel dulu untuk memulai ulang.")
         return state
+    # S2 guard: form handler lain aktif di chat ini -> jangan start / reset
+    # user_data milik handler tersebut (cross-handler overwrite).
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    user_id = update.effective_user.id if update.effective_user else None
+    if chat_id is not None and user_id is not None and _guard.active_name(chat_id, user_id) is not None:
+        await update.effective_message.reply_text(
+            "Kamu masih di tengah form lain — selesaikan atau ketik /cancel dulu, baru mulai /log.")
+        return ConversationHandler.END
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     facilitator = users.get(update.effective_chat.id)
     if not facilitator:
@@ -707,4 +716,5 @@ def register(app: Application, cfg: Config) -> None:
         allow_reentry=True,
     )
     LOG_CONV = conv
+    _guard.register_conv("log_conv", conv)
     app.add_handler(conv)

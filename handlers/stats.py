@@ -28,12 +28,13 @@ from telegram.ext import (
 import sheets
 import usage
 import users
+from config import DEFAULT_ADMIN_ID
 
 log = logging.getLogger(__name__)
 
-# Default admin id (uid ATAU chat id) — sama dgn config.py default ADMIN_IDS.
-# Gambar: admin diambil dari cfg.admin_ids (env ADMIN_IDS, comma-separated).
-ADMIN_ID = 2061872254
+# Default admin id (uid ATAU chat id) — satu sumber dari config.py
+# (DEFAULT_ADMIN_ID); gambar: admin diambil dari cfg.admin_ids (env ADMIN_IDS).
+ADMIN_ID = DEFAULT_ADMIN_ID
 
 ACT_LABEL = {"zoom": "log", "absen": "absen", "rekap": "rekap",
              "backup": "backup", "cancel": "cancel"}

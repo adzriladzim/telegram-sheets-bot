@@ -61,3 +61,4 @@ assert len(re.findall(r"<i>", blob)) == len(re.findall(r"</i>", blob)), "i tags 
 print("OK case2 tag balance: b/i balanced, only known tags")
 
 print("ALL PASS")
+sys.exit(0)

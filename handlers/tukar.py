@@ -26,12 +26,16 @@ import users
 from config import Config
 from handlers import status as st
 from handlers.stats import _admin_ids, _admin_ok
+from handlers import _guard
 
 log = logging.getLogger(__name__)
 
 CLASS, KODE_DIA, PARTNER, POLA, TANGGAL, JAM, CONFIRM = range(7)
 _TTIMEOUT = 60 * 60
 _POLA_LABEL = {"sekali": "sekali", "tetap": "tetap", "jam": "jam"}
+
+# Set di register() — referensi conv utk guard re-entry + cross-handler (S2).
+TUKAR_CONV = None
 
 
 def _sheets(ctx): return ctx.bot_data["sheets"]
@@ -46,6 +50,10 @@ def _norm_name(s: str) -> str:
 async def cmd_tukar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.callback_query:
         await update.callback_query.answer()
+    # S2 guard: re-entry form yg sama -> jangan reset; handler lain aktif -> blok.
+    g = await _guard.guard_entry(update, context, "tukar_conv", "tukar")
+    if g is not None:
+        return g
     name = users.get(update.effective_chat.id)
     if not name:
         await update.effective_message.reply_text(users.UNREGISTERED_MSG)
@@ -495,6 +503,8 @@ def register(app: Application, cfg: Config) -> None:
         allow_reentry=True,
     )
     app.add_handler(conv)
+    TUKAR_CONV = conv
+    _guard.register_conv("tukar_conv", conv)
     app.add_handler(CommandHandler("tukar_batal", cmd_batal))
     app.add_handler(CommandHandler("tukar_riwayat", cmd_riwayat))
     app.add_handler(CommandHandler("tukar_admin", cmd_admin))
