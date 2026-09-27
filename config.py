@@ -1,11 +1,14 @@
 """Environment config. Single source of truth for env vars."""
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+log = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -72,6 +75,11 @@ class Config:
     heartbeat_hour: int  # UTC
     heartbeat_minute: int
     heartbeat_enabled: bool
+    # H+1 follow-up Zoom Record — broadcast harian 00:00 UTC = 07:00 WIB.
+    # TERPISAH dari reminder_slots: semantics _is_full_slot (04/12/20 WIB)
+    # TIDAK disentuh. Job cek kelas kemarin yang belum di-log per fasil.
+    h1_followup_hour: int = 0  # UTC
+    h1_followup_enabled: bool = True
     darurat_online: bool = False
 
     # Feedback spreadsheet (web CSAT "Form Responses 1") — dibaca READ-ONLY.
@@ -140,6 +148,8 @@ def load_config() -> Config:
         heartbeat_hour=_int("HEARTBEAT_HOUR", 22),
         heartbeat_minute=_int("HEARTBEAT_MINUTE", 0),
         heartbeat_enabled=os.getenv("HEARTBEAT_ENABLED", "true").strip().lower() in {"1", "true", "yes"},
+        h1_followup_hour=_int("H1_FOLLOWUP_HOUR", 0),
+        h1_followup_enabled=os.getenv("H1_FOLLOWUP_ENABLED", "true").strip().lower() in {"1", "true", "yes"},
         darurat_online=os.getenv("DARURAT_ONLINE", "false").strip().lower() in {"1", "true", "yes"},
         feedback_ss_id=os.getenv("FEEDBACK_SS_ID", "1dZQcq3TvPh7wkW0z8SF94YExs5jONYf_O3oV09Hk604").strip(),
         feedback_tab=os.getenv("FEEDBACK_TAB", "Form Responses 1").strip(),
@@ -149,4 +159,9 @@ def load_config() -> Config:
         raise ConfigError("TELEGRAM_BOT_TOKEN is empty. Copy .env.example to .env and fill it.")
     if not cfg.service_account_json.exists():
         raise ConfigError(f"Service account file not found: {cfg.service_account_json}")
+    if (cfg.h1_followup_enabled and cfg.heartbeat_enabled
+            and cfg.h1_followup_hour == cfg.heartbeat_hour):
+        log.warning("H1_FOLLOWUP_HOUR (%d) == HEARTBEAT_HOUR (%d) — kedua job "
+                    "berjalan di jam UTC sama, window broadcast bentrok",
+                    cfg.h1_followup_hour, cfg.heartbeat_hour)
     return cfg

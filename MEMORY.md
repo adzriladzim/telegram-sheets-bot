@@ -681,7 +681,9 @@ Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, 
 - **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); gambar → vision agent. Cavemem MCP down — append manual.
 
 
-## [2026-09-26] Gelombang-2 fixes — user_data collision guard + hygiene (UNCOMMITTED)
+## [2026-09-26] Gelombang-2 fixes — user_data collision guard + hygiene SHIPPED e34e86f
+
+> STATUS UPDATE: entry UNCOMMITTED di bawah kini **COMMITTED `e34e86f`** (pushed `7525ddc..e34e86f`, HEAD main = e34e86f). Railway deploy MANUAL — **BELUM diklik → ACTIVE harus jadi e34e86f**. Review **APPROVED** (0 S1/S2; sisa 3×S3 dead code non-block + 1 typo). Detail isi di bawah (dari sesi kerja, akurat).
 
 > Fix 8 temuan gelombang-2 di HEAD 7525ddc. BELUM commit (sengaja). JANGAN commit tanpa review.
 
@@ -698,4 +700,4 @@ un_polling(stop_signals=(SIGINT,SIGTERM,SIGABRT)) — PTB v22 native, SIGTERM di
 - **Exit code verify:** verify_stats_path crash-track -> exit(1); html_escape/reminder_slots/stats_chunks/stats_html/schedule_week_window diberi sys.exit.
 - **Verify BARU:** verify_user_data_namespace.py (13/13), verify_usage_retention.py (9/9).
 - **HASIL:** compileall 0 err; wajib: backup_delegation 11, reminder 22, zoom_picker 26, log_date 18, s2s3 26, html_escape ALL PASS, + 2 baru. 6 verify gagal = PRA-ADA terarsip (725423d/s3 Config reminder_hour, tukar swapped API, stats_redesign/zoom_display/stats_html stale+console) — bukan regresi.
-- **NEXT (user):** review file:line -> commit sendiri (JANGAN commit dari agent).
+- **NEXT (user):** review file:line -> commit sendiri (JANGAN commit dari agent). → **SELESAI** commit `e34e86f` (see status di atas). Sekarang: Railway **Deploy Latest Commit** → cek ACTIVE = `e34e86f` → tes live cross-handler guard: `/zoom` lalu `/rekap` → DITOLAK (conversation aktif).

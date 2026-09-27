@@ -454,6 +454,16 @@ def class_done_key(c: ClassEntry) -> tuple[str, str]:
     return (c.code.casefold(), last_date_for_day(c.day))
 
 
+def resolve_class_code(classes: list[ClassEntry], code: str) -> ClassEntry | None:
+    """ClassEntry pertama dgn kode casefold match; None bila tak ada.
+    Dipakai prefill H+1 follow-up (best-effort: kode yg tak ketemu di daftar
+    kelas -> fallback picker biasa, jangan crash)."""
+    k = (code or "").strip().casefold()
+    if not k:
+        return None
+    return next((c for c in classes if c.code.strip().casefold() == k), None)
+
+
 class SheetsClient:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
@@ -945,6 +955,12 @@ class SheetsClient:
     async def get_done_by_date(self, facilitator_name: str) -> set[tuple[str, str]]:
         return await self._run(partial(self._get_done_by_date, facilitator_name))
 
+    async def active_backup_keys(self, facilitator_name: str) -> set[tuple[str, str]]:
+        """(kode.casefold(), dd/mm/yyyy) baris Backup di mana fasil terdaftar sbg
+        FASIL AWAL (col B) — delegasi aktif utk fasil tsb = dianggap done (H+1
+        follow-up skip). Wrapper async utk _active_backup_keys (single-flight)."""
+        return await self._run(partial(self._active_backup_keys, facilitator_name))
+
     def _zoom_entries(self, name: str) -> list[dict]:
         """Zoom Record rows milik fasil (col C match). Read-only wrapper untuk
         picker /rekap — 1 baris Zoom = 1 baris rekap potensial."""
@@ -1311,12 +1327,15 @@ class SheetsClient:
         ket_master = chosen[COL_KETERANGAN].strip() if len(chosen) > COL_KETERANGAN else ""
         return zoom_no, sks, semester, ket_master
 
-    def _fetch_backup_classes(self, facilitator_name: str) -> list[ClassEntry]:
+    def _fetch_backup_classes(self, facilitator_name: str, on_date=None) -> list[ClassEntry]:
         """Classes where facilitator is listed as Fasil Pengganti in Backup sheet.
 
         Filter minggu WIB berjalan: backup basi (tanggal di luar Senin..Minggu)
         TIDAK dikembalikan — mencegah 'Selasa 8 Sep' muncul/men-spam di 'Selasa
-        15 Sep'. Fail-open: tanggal tak ter-parse -> tetap tampil (perilaku lama)."""
+        15 Sep'. Fail-open: tanggal tak ter-parse -> tetap tampil (perilaku lama).
+        `on_date` (date): anchor tanggal EKSPLISIT (H+1 follow-up) — pakai
+        tanggal sama persis, TANPA filter minggu berjalan (kemarin bisa lintas
+        week boundary, mis. Minggu lalu saat hari ini Senin)."""
         try:
             rows = self._cached_rows(self.cfg.sheet_id, self.cfg.backup_sheet)
         except SheetsError:
@@ -1336,7 +1355,10 @@ class SheetsClient:
                 continue
             hari_tanggal = row[2].strip() if len(row) > 2 else ""  # Col C
             d_bs = _parse_tanggal_panjang(hari_tanggal)
-            if d_bs is not None and not (mon <= d_bs <= sun):
+            if on_date is not None:
+                if d_bs != on_date:
+                    continue  # bukan tanggal anchor (H+1)
+            elif d_bs is not None and not (mon <= d_bs <= sun):
                 continue  # backup basi / di luar minggu berjalan — lewati
             day = hari_tanggal.split(",")[0].strip() if "," in hari_tanggal else hari_tanggal.split()[0] if hari_tanggal else ""
             # Lookup zoom/sks/semester/keterangan from master by kode (rombel-match
@@ -1372,6 +1394,11 @@ class SheetsClient:
 
     async def get_backup_classes(self, facilitator_name: str) -> list[ClassEntry]:
         return await self._run(partial(self._fetch_backup_classes, facilitator_name))
+
+    async def backup_classes_on(self, facilitator_name: str, on_date) -> list[ClassEntry]:
+        """Backup classes utk SATU tanggal eksplisit (H+1 follow-up) — tanpa
+        filter minggu berjalan (anchor tanggal, bukan week-window today)."""
+        return await self._run(partial(self._fetch_backup_classes, facilitator_name, on_date))
 
     def _fetch_makeup_classes(self, facilitator_name: str) -> list[ClassEntry]:
         """Make-up classes from Cancel tab — READ-ONLY (bot never writes J..R).

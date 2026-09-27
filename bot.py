@@ -14,7 +14,7 @@ from telegram.ext import Application, ContextTypes
 import config
 import sheets
 import users
-from handlers import heartbeat, reminder
+from handlers import heartbeat, reminder, h1_followup
 from handlers import register as register_handlers
 
 BASE_DIR = config.BASE_DIR
@@ -57,6 +57,7 @@ async def _post_init(app: Application) -> None:
         app.job_queue.run_repeating(_sheets_warm_job, interval=1800, first=1800, name="sheets:warm")
     await reminder.restore_jobs(app)
     await heartbeat.restore_jobs(app)
+    await h1_followup.restore_jobs(app)
     logging.getLogger(__name__).info("Bot ready.")
 
 

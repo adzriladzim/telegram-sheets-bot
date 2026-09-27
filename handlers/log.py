@@ -205,6 +205,11 @@ async def cmd_log(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.effective_message.reply_text(users.UNREGISTERED_MSG)
         return ConversationHandler.END
     context.user_data["facilitator"] = facilitator
+    # Prefill H+1 follow-up: h1l:<kode> (✏️ Isi /zoom) / h1s:<kode> (✅ cek sendiri).
+    pref = ""
+    if update.callback_query and (qd := (update.callback_query.data or "")):
+        if qd.startswith(("h1l:", "h1s:")):
+            pref = qd.split(":", 1)[1].strip()
     loading = await update.effective_message.reply_text("⏳ Harap tunggu — ambil jadwal...")
     try:
         personal, backup, makeup = await _sheets(context).get_all_loggable_classes(facilitator)
@@ -230,8 +235,28 @@ async def cmd_log(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["done_by_date"] = done_by_date
     show_done = bool(context.user_data.get("zoom_show_done"))
     text, kb_rows = _build_class_view(ordered, done_by_date, show_done)
-    context.user_data["class_kb"] = kb_rows
+    context.user_data["class_kb"] = kb_rows  # utk tombol ◀️ Kembali (jalur prefill)
     context.user_data["class_text"] = text
+    if pref:
+        c = sheets.resolve_class_code(ordered, pref)
+        if c is not None:
+            context.user_data["cls"] = c
+            context.user_data.pop("lecture_date", None)  # override tanggal — reset
+            await update.effective_message.reply_text(
+                f"Kelas: <b>{html.escape(c.code)}</b> — {html.escape(c.subject)}\n\n",
+                parse_mode=ParseMode.HTML)
+            # Personal: tawarkan tanggal (sama dgn pick_class); backup/make-up
+            # tanggal eksplisit -> langsung pertemuan.
+            if c.category not in ("Backup", "Make-up"):
+                last = sheets.last_date_for_day(c.day)
+                nxt = sheets.next_date_for_day(c.day)
+                if last != nxt:
+                    await update.effective_message.reply_text(
+                        "📅 Tanggal kelasnya? — pilih salah satu (default jadwal berikutnya)",
+                        reply_markup=_date_kb(c))
+                    return DATE
+            return await _meeting_step(update.callback_query, context, c)
+        # kode tak ketemu di daftar kelas — fallback picker biasa (prefill best-effort)
     await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb_rows))
     return CLASS
 
@@ -690,7 +715,8 @@ def register(app: Application, cfg: Config) -> None:
     global LOG_CONV
     conv = ConversationHandler(
         entry_points=[CommandHandler(["log", "zoom", "zoom_record"], cmd_log),
-                      CallbackQueryHandler(cmd_log, pattern=r"^go:log$")],
+                      CallbackQueryHandler(cmd_log, pattern=r"^go:log$"),
+                      CallbackQueryHandler(cmd_log, pattern=r"^h1[ls]:")],
         states={
             CLASS: [CallbackQueryHandler(pick_class, pattern=r"^c:\d+$"),
                     CallbackQueryHandler(toggle_done_view, pattern=r"^vd:[01]$"),

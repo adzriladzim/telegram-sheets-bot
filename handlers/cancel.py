@@ -36,6 +36,13 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     g = await _guard.guard_entry(update, context, "cancel_conv", "cancel")
     if g is not None:
         return g
+    # Prefill H+1 follow-up: h1c:<kode> cancel, h1r:<kode> cancel + catatan reschedule.
+    pref = ""
+    if update.callback_query and (qd := (update.callback_query.data or "")):
+        if qd.startswith(("h1c:", "h1r:")):
+            pref = qd.split(":", 1)[1].strip()
+    if not update.callback_query or not (update.callback_query.data or "").startswith("h1r:"):
+        context.user_data.pop("cc_note", None)  # bersihkan sisa reschedule lama
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     name = users.get(update.effective_chat.id)
     if not name:
@@ -52,8 +59,21 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not classes:
         await update.effective_message.reply_text("Tidak ada kelas.")
         return ConversationHandler.END
+    context.user_data["cc_classes"] = classes  # utk tombol ◀️ Kembali (jalur prefill)
+    if pref:
+        c = sheets.resolve_class_code(classes, pref)
+        if c is not None:
+            context.user_data["cc_cls"] = c
+            if (update.callback_query.data or "").startswith("h1r:"):
+                context.user_data["cc_note"] = "reschedule (dari follow-up H+1)"
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Kembali", callback_data="cc:back_class")]])
+            await update.effective_message.reply_text(
+                f"Kelas: <b>{html.escape(c.code)}</b> — {html.escape(c.subject)}\n\n"
+                "2️⃣ Jadwal Awal? (contoh: Selasa, 9 September 2026)",
+                parse_mode=ParseMode.HTML, reply_markup=kb)
+            return JADWAL
+        # kode tak ketemu di daftar kelas — fallback picker biasa (prefill best-effort)
     kb = _cc_class_kb(classes)
-    context.user_data["cc_classes"] = classes
     await update.effective_message.reply_text("1️⃣ Pilih kelas yang cancel:", reply_markup=kb)
     return CLASS
 
@@ -130,7 +150,13 @@ async def _confirm(msg, context):
     chat_id = msg.chat_id if hasattr(msg, 'chat_id') else context.effective_chat.id
     name = users.get(chat_id) or ""
     rec = sheets.CancelRecord(c.lecturer, c.subject, context.user_data["cc_jadwal"], c.time_range, context.user_data["cc_sesi"], c.code, c.sks, name)
-    txt = f"📋 <b>Konfirmasi Cancel:</b>\n• Dosen: {html.escape(rec.lecturer)}\n• Matkul: {html.escape(rec.subject)}\n• Jadwal Awal: {html.escape(rec.jadwal_awal)}\n• Jam: {html.escape(rec.jam)}\n• Sesi: {html.escape(rec.sesi)}\n• Kode: {html.escape(rec.kode)}\n• SKS: {html.escape(rec.sks)}\n• Fasil: {html.escape(rec.facilitator)}\n\nSubmit?"
+    txt = f"📋 <b>Konfirmasi Cancel:</b>\n• Dosen: {html.escape(rec.lecturer)}\n• Matkul: {html.escape(rec.subject)}\n• Jadwal Awal: {html.escape(rec.jadwal_awal)}\n• Jam: {html.escape(rec.jam)}\n• Sesi: {html.escape(rec.sesi)}\n• Kode: {html.escape(rec.kode)}\n• SKS: {html.escape(rec.sks)}\n• Fasil: {html.escape(rec.facilitator)}"
+    # Catatan auto utk aksi "Reschedule" dari H+1 follow-up (display + user_data;
+    # sheet J..R tetap READ-ONLY invariant — tidak ditulis ke sheet).
+    cc_note = context.user_data.get("cc_note")
+    if cc_note:
+        txt += f"\n• Catatan: {html.escape(cc_note)}"
+    txt += "\n\nSubmit?"
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Submit", callback_data="cc:ok"), InlineKeyboardButton("❌ Batal", callback_data="cc:no")],
         [InlineKeyboardButton("◀️ Kembali", callback_data="cc:back_sesi")],
@@ -169,7 +195,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 def register(app: Application, cfg: Config) -> None:
     conv = ConversationHandler(
         entry_points=[CommandHandler("cancel", cmd_cancel),
-                      CallbackQueryHandler(cmd_cancel, pattern=r"^go:cancel$")],
+                      CallbackQueryHandler(cmd_cancel, pattern=r"^go:cancel$"),
+                      CallbackQueryHandler(cmd_cancel, pattern=r"^h1[cr]:")],
         states={
             CLASS: [CallbackQueryHandler(pick_class, pattern=r"^cc:\d+$"), CallbackQueryHandler(back_cc_cancel, pattern=r"^cc:cancel$")],
             JADWAL: [CallbackQueryHandler(back_to_cc_class, pattern=r"^cc:back_class$"), MessageHandler(filters.TEXT & ~filters.COMMAND, enter_jadwal)],

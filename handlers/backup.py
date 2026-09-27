@@ -35,6 +35,11 @@ async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     g = await _guard.guard_entry(update, context, "backup_conv", "backup")
     if g is not None:
         return g
+    # Prefill H+1 follow-up: h1b:<kode> — buka /backup dgn kelas sudah terpilih.
+    pref = ""
+    if update.callback_query and (qd := (update.callback_query.data or "")):
+        if qd.startswith("h1b:"):
+            pref = qd.split(":", 1)[1].strip()
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     name = users.get(update.effective_chat.id)
     if not name:
@@ -53,8 +58,19 @@ async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not classes:
         await update.effective_message.reply_text("Tidak ada kelas.")
         return ConversationHandler.END
+    context.user_data["bk_classes"] = classes  # utk tombol ◀️ Kembali (jalur prefill)
+    if pref:
+        c = sheets.resolve_class_code(classes, pref)
+        if c is not None:
+            context.user_data["bk_cls"] = c
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Kembali", callback_data="bk:back_class")]])
+            await update.effective_message.reply_text(
+                f"Kelas: <b>{html.escape(c.code)}</b> — {html.escape(c.subject)}\n\n"
+                "2️⃣ Hari/Tanggal izin? (contoh: Senin, 8 September 2026)",
+                parse_mode=ParseMode.HTML, reply_markup=kb)
+            return TANGGAL
+        # kode tak ketemu di daftar kelas — fallback picker biasa (prefill best-effort)
     kb = _bk_class_kb(classes)
-    context.user_data["bk_classes"] = classes
     await update.effective_message.reply_text("1️⃣ Pilih kelas yang mau dibackup:", reply_markup=kb)
     return CLASS
 
@@ -235,7 +251,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 def register(app: Application, cfg: Config) -> None:
     conv = ConversationHandler(
         entry_points=[CommandHandler("backup", cmd_backup),
-                      CallbackQueryHandler(cmd_backup, pattern=r"^go:backup$")],
+                      CallbackQueryHandler(cmd_backup, pattern=r"^go:backup$"),
+                      CallbackQueryHandler(cmd_backup, pattern=r"^h1b:")],
         states={
             CLASS: [CallbackQueryHandler(pick_class, pattern=r"^bk:\d+$"), CallbackQueryHandler(back_bk_cancel, pattern=r"^bk:cancel$")],
             TANGGAL: [CallbackQueryHandler(back_to_bk_class, pattern=r"^bk:back_class$"), MessageHandler(filters.TEXT & ~filters.COMMAND, enter_tanggal)],
