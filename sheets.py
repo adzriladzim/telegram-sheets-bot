@@ -687,7 +687,9 @@ class SheetsClient:
                 out.add((kode.casefold(), tgl))
         return out
 
-    def _fetch_classes(self, facilitator_name: str) -> list[ClassEntry]:
+    def _fetch_classes(self, facilitator_name: str, include_delegated: bool = False) -> list[ClassEntry]:
+        """`include_delegated=True`: kembalikan juga kelas yg sedang didelegasikan
+        ke backup (pola /reminder_dosen — user masih pemilik kelas utk info dosen)."""
         rows = self._cached_rows(self.cfg.sheet_id, self.cfg.master_sheet)
         target = self._normalize(facilitator_name)
         # Kelas milik user yang sedang didelegasikan (baris Backup aktif match
@@ -705,7 +707,7 @@ class SheetsClient:
             if not code:
                 continue
             day = row[COL_DAY].strip()
-            if delegated:
+            if not include_delegated and delegated:
                 dkey = self._class_week_date_str(day)
                 if dkey and (code.casefold(), dkey) in delegated:
                     continue  # kelas ini dibackup minggu ini — jangan tampil ke A
@@ -777,7 +779,7 @@ class SheetsClient:
 
     # ---------- async API ----------
 
-    async def get_classes(self, facilitator_name: str | None = None) -> list[ClassEntry]:
+    async def get_classes(self, facilitator_name: str | None = None, include_delegated: bool = False) -> list[ClassEntry]:
         # Empty guard: normalized "" would false-match master-sheet rows with blank fasilitator cells.
         name = (facilitator_name or self.cfg.facilitator_name).strip()
         if not name:
@@ -785,12 +787,13 @@ class SheetsClient:
         import time as _t
         key = self._normalize(name)
         hit = _classes_cache.get(key)
-        if hit and _t.time() - hit[0] < _CACHE_TTL:
+        if hit and _t.time() - hit[0] < _CACHE_TTL and not include_delegated:
             return hit[1]
-        res = await self._run(partial(self._fetch_classes, name))
-        # Tukar overlay: baca swap dulu (jadwal/zoom/rekap lihat pemilik baru).
+        res = await self._run(partial(self._fetch_classes, name, include_delegated))
+        # Overlay swap: baca swap dulu (jadwal/zoom/rekap lihat pemilik baru).
         res = await self._run(partial(self._merged_classes, name, res))
-        _classes_cache[key] = (_t.time(), res)
+        if not include_delegated:
+            _classes_cache[key] = (_t.time(), res)
         return res
 
     def _find_facilitator_names(self, search: str) -> list[str]:
@@ -1492,6 +1495,70 @@ class SheetsClient:
 
     async def get_makeup_notes(self, facilitator_name: str) -> dict[str, tuple[str, str]]:
         return await self._run(partial(self._fetch_makeup_notes, facilitator_name))
+
+    def _backup_context(self, kode: str, date_str: str) -> dict | None:
+        """(kode, dd/mm/yyyy) baris Backup pertama yg cocok (col E==kode, col C==tanggal):
+        {awal: col B, pengganti: col I}. Dipakai /reminder_dosen prefill field Pengganti
+        (backup template). Fail-open None. Read-only."""
+        k = (kode or "").strip().casefold()
+        tgl = self._norm_date(date_str or "")
+        if not k or not tgl:
+            return None
+        try:
+            rows = self._cached_rows(self.cfg.sheet_id, self.cfg.backup_sheet)
+        except SheetsError:
+            return None
+        # Backup sheet: row0 = info, row1 = header, data dari row2
+        for i, row in enumerate(rows):
+            if i < 2 or len(row) <= 8:
+                continue
+            rk = row[4].strip() if len(row) > 4 else ""  # Col E kode
+            if rk.casefold() != k:
+                continue
+            rtgl = self._norm_date(row[2].strip() if len(row) > 2 else "")  # Col C Hari/Tanggal
+            if rtgl != tgl:
+                continue
+            return {
+                "awal": row[1].strip() if len(row) > 1 else "",
+                "pengganti": row[8].strip() if len(row) > 8 else "",
+            }
+        return None
+
+    async def backup_context(self, kode: str, date_str: str) -> dict | None:
+        return await self._run(partial(self._backup_context, kode, date_str))
+
+    def _cancel_schedule_for(self, kode: str) -> dict | None:
+        """Baris tab Cancel pertama utk kode. Prioritas baris yg punya jadwal
+        make-up (L terisi). Return {jadwal_awal (F), jam (G), jadwal_makeup (L),
+        jam_makeup (M)} utk prefill 'Jadwal baru' /reminder_dosen reschedule. Fail-open None."""
+        k = (kode or "").strip().casefold()
+        if not k:
+            return None
+        try:
+            rows = self._cached_rows(self.cfg.sheet_id, self.cfg.cancel_sheet)
+        except SheetsError:
+            return None
+        best = None
+        for i, row in enumerate(rows):
+            if i == 0 or len(row) <= CNL_JADWAL_MAKEUP:
+                continue
+            rk = row[CNL_KODE].strip() if len(row) > CNL_KODE else ""
+            if rk.casefold() != k:
+                continue
+            rec = {
+                "jadwal_awal": row[CNL_JADWAL_AWAL].strip() if len(row) > CNL_JADWAL_AWAL else "",
+                "jam": row[CNL_JAM].strip() if len(row) > CNL_JAM else "",
+                "jadwal_makeup": row[CNL_JADWAL_MAKEUP].strip() if len(row) > CNL_JADWAL_MAKEUP else "",
+                "jam_makeup": row[CNL_JAM_MAKEUP].strip() if len(row) > CNL_JAM_MAKEUP else "",
+            }
+            if rec["jadwal_makeup"]:
+                return rec
+            if best is None:
+                best = rec
+        return best
+
+    async def cancel_schedule_for(self, kode: str) -> dict | None:
+        return await self._run(partial(self._cancel_schedule_for, kode))
 
     async def get_all_loggable_classes(self, facilitator_name: str) -> tuple[list[ClassEntry], list[ClassEntry], list[ClassEntry]]:
         """Return (personal classes, backup classes, make-up classes)."""

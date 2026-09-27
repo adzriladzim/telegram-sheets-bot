@@ -1,7 +1,7 @@
 # MEMORY — telegram-sheets-bot (TelefasilBot)
 
 > Per-project memory. Read at cold session start. Append-only.
-> Updated: 2026-09-26 (audit menyeluruh S2-S4 **SHIPPED 7525ddc**, pushed ead798d..7525ddc; verify*.py pindah ke scripts/verify/; deploy MANUAL belum diklik → ACTIVE harus 7525ddc)
+> Updated: 2026-09-28 (Fitur H+1 Follow-up **SHIPPED bf07be8**, pushed e34e86f..bf07be8; deploy MANUAL belum diklik → ACTIVE harus bf07be8)
 
 ## What
 Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, rekap kehadiran, backup, cancel kelas langsung ke Google Sheets. Multi-user (satu bot, tiap fasil lihat jadwal sendiri). Bot: [@telefasil_bot](https://t.me/telefasil_bot).
@@ -701,3 +701,43 @@ un_polling(stop_signals=(SIGINT,SIGTERM,SIGABRT)) — PTB v22 native, SIGTERM di
 - **Verify BARU:** verify_user_data_namespace.py (13/13), verify_usage_retention.py (9/9).
 - **HASIL:** compileall 0 err; wajib: backup_delegation 11, reminder 22, zoom_picker 26, log_date 18, s2s3 26, html_escape ALL PASS, + 2 baru. 6 verify gagal = PRA-ADA terarsip (725423d/s3 Config reminder_hour, tukar swapped API, stats_redesign/zoom_display/stats_html stale+console) — bukan regresi.
 - **NEXT (user):** review file:line -> commit sendiri (JANGAN commit dari agent). → **SELESAI** commit `e34e86f` (see status di atas). Sekarang: Railway **Deploy Latest Commit** → cek ACTIVE = `e34e86f` → tes live cross-handler guard: `/zoom` lalu `/rekap` → DITOLAK (conversation aktif).
+
+## [2026-09-28] Fitur H+1 Follow-up SHIPPED bf07be8
+> **SHIPPED** commit `bf07be8` pushed `e34e86f..bf07be8` (HEAD main = bf07be8). Railway deploy MANUAL selalu (auto-deploy off) — **BELUM diklik → ACTIVE harus jadi bf07be8**. Review **APPROVED** (0 S1/S2; S3 stagger + S4 log count sudah fix). Lanjutan entri [2026-09-26] gelombang-2 audit.
+
+- **TUJUAN:** kelas KEMARIN yang belum di-log Zoom Record → broadcast pagi H+1, inline keyboard biar fasil selesaikan/klarifikasi dari chat (tanpa harus buka bot di hari lain).
+- **Jadwal:** `H1_FOLLOWUP_HOUR=0` UTC = **07:00 WIB** — TERPISAH dari `REMINDER_TIMES` (04:00/12:00/20:00 WIB). Env: `H1_FOLLOWUP_ENABLED` (bool), `H1_FOLLOWUP_HOUR`. Warning di startup kalau `H1_FOLLOWUP_HOUR == heartbeat_hour` (bentrok).
+- **Files:**
+  - `handlers/h1_followup.py` (BARU) — deteksi + broadcast + callback inline keyboard.
+  - `config.py` — `h1_followup_hour`/`h1_followup_enabled`.
+  - `sheets.py` — `backup_classes_on(anchor_date)` lintas **week boundary** (anchor tanggal kemarin, bukan window Senin-Minggu), `active_backup_keys`, `resolve_class_code` (kode kelas casefold/trim untuk lookup konsisten).
+  - `handlers/cancel.py` `backup.py` `log.py` — prefill entry `h1c`/`h1r`/`h1b`/`h1l`/`h1s` supaya teks dari keyboard masuk ke conversation step pertama (user tinggal lanjut).
+  - `bot.py` + `handlers/__init__.py` — wire job + handler.
+  - `.env.example` — var baru.
+- **Deteksi missing (`_yesterday_wib`):**
+  - Personal: weekday kemarin match jadwal (`day == yesterday.weekday()`) → kandidat.
+  - Backup/make-up: `parse_backup_date` == kemarin (bukan weekday match — backup bisa lintas hari).
+  - **Skip done:** `get_done_by_date(owner)` (sudah di-log Zoom Record kemarin) + delegasi aktif (`active_backup_keys` = kelompok lain yang bertanggung jawab).
+  - **Fail-open:** error parse/deteksi → lewati chat, jangan crash broadcast.
+- **Keyboard:** `[❌Dibatalkan][🔁Reschedule][🔄Backup][✏️Isi /zoom][✅Cek sendiri]` — setiap tombol prefill ke conv existing → flow yang SUDAH ADA dipakai ulang.
+  - ❌/🔁 → `/cancel` flow (`h1c` cancel, `h1r` reschedule dgn `cc_note="reschedule"` note lokal — **cancel sheet J..R read-only invariant TETAP**, reschedule cukup catat note di conversation, sheet cancel tak ditulis).
+  - 🔄 → `/backup` (`h1b`).
+  - ✏️ → `/zoom` log (`h1l` log, `h1s` cek sendiri — langsung tampilkan status kelas kemarin).
+- **Broadcast engine:** job JobQueue tunggal `"h1_followup:broadcast"` (bukan repeating per-chat) → iterate chats, stagger **1s PER-BATCH** (anti-429 Telegram), counter `chats_notified`, log per-chat. Guard `allow_reentry` + `_guard` (handlers/_guard.py) + `for_chat` (lock sheets) + `html.escape` semua teks user.
+- **Keputusan:**
+  - Reschedule = **reuse `/cancel` + note** — alur follow-up baru untuk reschedule DITOLAK (duplikasi logika, cancel sheet invariant dijaga).
+  - Follow-up **H+1 pagi 07:00** (bukan malam — pagi biar kelas hari itu belum mulai, fasil bisa prep).
+  - **H+2 re-followup TIDAK otomatis:** `_detect_missing` hanya cek `yesterday` DOANG. Kelas yang belum di-log H+2 dst TIDAK muncul lagi. DITERIMA (user setuju sekali broadcast), CATAT gap: kalau mau H+2 → perlu lookback multi-day (`_yesterday_wib` → N hari).
+- **VERIFIKASI:** `verify_h1_followup.py` (BARU, scripts/verify/) **43 PASS** (deteksi personal/backup/makeup, skip done/delegasi, prefill semua tombol, cancel invariant, stagger, counters) + suite utama pass. `py -m compileall` OK. Offline tanpa creds, bot TIDAK dijalankan.
+- **NEXT (user):** Railway **Deploy Latest Commit** → cek ACTIVE jadi `bf07be8` → tes live 07:00 WIB besok (kelas kemarin belum log → broadcast + keyboard).
+- **Pertimbangan VPS (belum diputuskan):** user consider Hostinger KVM 2 SG Rp155.900/bln / Hetzner CX23 / Oracle free tier — riset tersimpan, BELUM keputusan final.
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); gambar → vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-28] telegram-sheets-bot - /pengajar template chat ke dosen [SHIPPED] Working Tree
+> **Project:** telegram-sheets-bot
+- **Fitur baru:** /pengajar (di-rename jadi **/reminder_dosen** — command name underscore, Telegram setMyCommands tolak hyphen) - generate template chat WhatsApp/Telegram ke dosen (read-only, tanpa tulis sheet). Flow: picker kelas grup (reuse handlers/log._group_picker_classes, kelas didelegasikan ikut tampil **🔀** via get_classes(include_delegated=True) - cache di-skip utk mode ini) -> jenis template 1 Normal / 2 Backup / 3 Reschedule -> tanggal (backup/make-up eksplisit; personal default 
+ext_date_for_day, step DATE kalau last!=next) -> backup prefill dari baris Backup ackup_context(kode,date) / reschedule prefill dari Cancel cancel_schedule_for(kode) (jadwal make-up L/M) + Tukar swap_tanggal, fallback tanya manual -> Bu/Pak -> final + tombol [📋 Salin] CopyTextButton (PTB v22.8, payload plain TANPA escape; display html.escape).
+- **Keputusan:** sapaan WIB slot = kata sifat ("pagi/siang/sore/malam") TANPA "Selamat" - template sudah memuat "Selamat {sapaan}" (hindari "Selamat Selamat pagi"). _sapaan_wib parameter 
+ow utk verify. Conv reminder_dosen_conv, guard + timeout 1hr + back-nav + usage.log action="reminder_dosen" (	ipe=t1/t2/t3). Bot command "Template pesan ke dosen".
+- **VERIFIKASI:** scripts/verify/verify_reminder_dosen.py (BARU) **57 PASS** (sapaan 4 slot+boundary, render 3 template x Bu/Pak wording EXACT, escape vs payload salin, anchor tanggal, backup_context, cancel_schedule_for + prefill, sebelumnya, include_delegated, label picker) + py -m compileall OK + import handlers,bot OK + suite utama: **nol regresi** (6 fail erify_725423d/verify_s3/verify_stats_html/verify_stats_redesign/verify_tukar/verify_zoom_display = **pre-existing** di clean HEAD bf07be8: drift config eminder_hour, stats._build_report rename, Unicode cp1252 stdout).
+- **NEXT (user):** Railway **Deploy Latest Commit** setelah review. JANGAN commit (instruksi).
