@@ -2,7 +2,8 @@
 
 Checks:
   1. sapaan WIB 4 slot + boundary (04/11/15/19 + 03:59/10:59/14:59/18:59)
-  2. render 3 template (Normal/Backup/Reschedule) x Bu/Pak — wording EXACT
+  2. render 3 template (Normal/Backup/Reschedule) x Bu/Pak — kode-only + wording
+     di-trim agar len(payload) <= 256 (CopyTextButton limit), judul hanya di info line
   3. html.escape display vs payload Salin plain (CopyTextButton PTB v22.8)
   4. anchor tanggal: backup/make-up eksplisit; personal default next (bukan last),
      _needs_date_step personal last!=next
@@ -15,6 +16,7 @@ Run: py scripts/verify/verify_reminder_dosen.py  (no network needed)
 """
 from __future__ import annotations
 
+import html
 import os
 import sys
 from datetime import datetime, timedelta
@@ -85,7 +87,7 @@ check("Normal Bu: pembuka 'Selamat pagi Bu + dosen' (tanpa dobel Selamat)",
       tpl_n_bu.startswith("Selamat pagi Bu Dr. Rina <AMD> 🙏"), tpl_n_bu[:50])
 check("Normal: kalimat izin mengandung Bu",
       "Izin mengingatkan untuk kelas yang akan berlangsung ya, Bu:" in tpl_n_bu)
-check("Normal: baris matkul+kode", "📚 Algoritma — CS101" in tpl_n_bu)
+check("Normal: baris kode (judul TIDAK di template)", "📚 CS101" in tpl_n_bu and "Algoritma" not in tpl_n_bu)
 check("Normal: tanggal panjang + jam WIB",
       "📅 Senin, 21 September 2026\n⏰ 13.00 - 15.30 WIB" in tpl_n_bu)
 check("Normal: penutup Bu", "Terima kasih, Bu 🙏" in tpl_n_bu)
@@ -97,34 +99,82 @@ check("Normal Pak: kalimat izin Pak", "ya, Pak:" in tpl_n_pak and "Terima kasih,
 c_b = cls("CS202", "Senin", subject="Basis Data", dosen="Dosen Y", time_range="08.00 - 10.00")
 tpl_b = pj.render_backup(c_b, "siang", "Bu", TGL, "Rina Bilqis", "Adzril Adzim")
 check("Backup: pembuka", tpl_b.startswith("Selamat siang Bu Dosen Y 🙏"))
-check("Backup: kalimat digantikan", "kelas nanti akan digantikan oleh rekan fasilitator lain ya, Bu:" in tpl_b)
-check("Backup: matkul+kode", "📚 Basis Data — CS202" in tpl_b)
+check("Backup: kalimat digantikan", "kelas nanti digantikan fasilitator lain ya, Bu:" in tpl_b)
+check("Backup: kode (judul TIDAK di template)", "📚 CS202" in tpl_b and "Basis Data" not in tpl_b)
 check("Backup: tanggal+jam", "📅 Senin, 21 September 2026\n⏰ 08.00 - 10.00 WIB" in tpl_b)
 check("Backup: pengganti + fasil awal",
       "👤 Pengganti: Rina Bilqis (menggantikan Adzril Adzim)" in tpl_b)
-check("Backup: penutup", "Kelas tetap jalan seperti jadwal ya, Bu. Terima kasih banyak 🙏" in tpl_b)
+check("Backup: penutup", "Kelas tetap jalan seperti jadwal ya, Bu. Terima kasih 🙏" in tpl_b)
 
 c_r = cls("CS303", "Selasa", subject="Statistika", dosen="Dosen Z", time_range="10.00 - 12.00")
 tpl_r = pj.render_reschedule(c_r, "malam", "Pak", "22/09/2026",
                              "Selasa, 22 September 2026, 10.00 - 12.00 WIB",
                              "Jumat, 25 September 2026, 18.00 - 20.00 WIB")
 check("Reschedule: pembuka malam Pak", tpl_r.startswith("Selamat malam Pak Dosen Z 🙏"))
-check("Reschedule: kalimat perubahan", "ada perubahan jadwal kelas nih, Pak:" in tpl_r)
-check("Reschedule: matkul+kode", "📚 Statistika — CS303" in tpl_r)
+check("Reschedule: kalimat perubahan", "jadwal kelas berubah, Pak:" in tpl_r)
+check("Reschedule: kode (judul TIDAK di template)", "📚 CS303" in tpl_r and "Statistika" not in tpl_r)
 check("Reschedule: sebelumnya+baru",
-      "🔙 Jadwal sebelumnya: Selasa, 22 September 2026, 10.00 - 12.00 WIB\n"
+      "🔙 Jadwal lama: Selasa, 22 September 2026, 10.00 - 12.00 WIB\n"
       "✅ Jadwal baru: Jumat, 25 September 2026, 18.00 - 20.00 WIB" in tpl_r)
-check("Reschedule: penutup", "Mohon maaf atas perubahannya, dan terima kasih atas pengertiannya ya, Pak 🙏" in tpl_r)
+check("Reschedule: penutup", "Mohon maaf, terima kasih atas pengertiannya ya, Pak 🙏" in tpl_r)
 
 
 # ---------- 3. escape display vs payload salin ----------
-plain_rich = pj.render_normal(cls("CSX", "Senin", subject="A < B & C", dosen="D < E"), "pagi", "Bu", TGL)
+plain_rich = pj.render_normal(cls("A < B & C", "Senin", subject="Aljabar", dosen="D < E"), "pagi", "Bu", TGL)
 disp, payload = pj._display_copy(plain_rich)
 check("display html.escape: &lt; &amp;",
       "&lt;" in disp and "&amp;" in disp and "<" not in disp.replace("&lt;", "").replace("&amp;", ""))
 check("payload plain: raw '<' & '&' tidak di-escape", payload == plain_rich and "<" in payload and "&" in payload)
 btn = InlineKeyboardButton("📋 Salin", copy_text=CopyTextButton(payload))
 check("CopyTextButton PTB v22: tombol salin menempel payload plain", btn.copy_text is not None and btn.copy_text.text == payload)
+
+
+# ---------- 3b. guard len(payload)<=256 + info line judul (display only) ----------
+def _copy_payload(kb):
+    for row in kb.inline_keyboard:
+        for b in row:
+            if b.copy_text:
+                return b.copy_text.text
+    return None
+
+
+LONG_JUDUL = "Pemrograman Berorientasi Objek Lanjutan & Aplikasi Enterprise Mikroservis"
+COMBI = [
+    ("normal", "CS-101", pj.render_normal(cls("CS-101", "Senin", subject=LONG_JUDUL, dosen="Dosen X"), s, b, TGL))
+    for s in ("pagi", "siang", "sore", "malam") for b in ("Bu", "Pak")
+] + [
+    ("backup", "CS-202", pj.render_backup(cls("CS-202", "Selasa", subject=LONG_JUDUL, dosen="Dosen Y"), s, b, TGL, "Rina", "Adzril"))
+    for s in ("pagi", "siang", "sore", "malam") for b in ("Bu", "Pak")
+] + [
+    ("reschedule", "CS-303", pj.render_reschedule(cls("CS-303", "Rabu", subject=LONG_JUDUL, dosen="Dosen Z"), s, b, TGL,
+                          "Selasa, 22 September 2026, 10.00 - 12.00 WIB", "Jumat, 25 September 2026, 18.00 - 20.00 WIB"))
+    for s in ("pagi", "siang", "sore", "malam") for b in ("Bu", "Pak")
+]
+for label, kode, tpl in COMBI:
+    check(f"len {label} {kode} <= 256 ({len(tpl)})", len(tpl) <= 256, str(len(tpl)))
+    check(f"payload {label} {kode}: kode ada, judul TIDAK", kode in tpl and LONG_JUDUL not in tpl)
+    fin, kb = pj._final_message(tpl, LONG_JUDUL, kode)
+    pay = _copy_payload(kb)
+    check(f"final {label} {kode}: payload=template only, tombol Salin ada", pay == tpl and pay is not None)
+    check(f"final {label} {kode}: judul di info line display, TIDAK di payload", "📖 Kelas:" in fin and html.escape(LONG_JUDUL) in fin and LONG_JUDUL not in pay)
+    check(f"final {label} {kode}: tombol Template lain ada", any(b.callback_data == "t:again" for row in kb.inline_keyboard for b in row))
+
+tpl_n_bu = pj.render_normal(c_n, "pagi", "Bu", TGL)
+fin, kb = pj._final_message(tpl_n_bu, "Algoritma", "CS101")
+pay = _copy_payload(kb)
+check("final normal: info line '📖 Kelas: Algoritma — CS101'", "📖 Kelas: Algoritma — CS101" in fin)
+check("final normal: payload=template only (bukan wrapper)", pay == tpl_n_bu)
+check("final normal: judul di display, TIDAK di payload", "Algoritma" in fin and "Algoritma" not in pay)
+
+# GUARD: kode panjang > 256 -> fallback tanpa tombol salin
+c_huge = cls("K" * 300, "Senin", subject="Aljabar")
+tpl_big = pj.render_normal(c_huge, "pagi", "Bu", TGL)
+check("guard: template > 256 terdeteksi", len(tpl_big) > 256, str(len(tpl_big)))
+fin_big, kb_big = pj._final_message(tpl_big, "Aljabar", c_huge.code)
+check("guard: fallback TANPA tombol Salin", _copy_payload(kb_big) is None)
+check("guard: hint 'Tahan pesan utk salin'", "Tahan pesan utk salin" in fin_big)
+check("guard: info line tetap tampil", "📖 Kelas: Aljabar" in fin_big)
+check("guard: tombol Template lain tetap ada", any(b.callback_data == "t:again" for row in kb_big.inline_keyboard for b in row))
 
 
 # ---------- 4. anchor tanggal ----------

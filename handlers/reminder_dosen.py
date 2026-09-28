@@ -16,8 +16,11 @@ Flow (user-approved FINAL):
      (swap_tanggal); kalau tidak tanya (text).
 5. 'Bu atau Pak utk sapaan dosen?' -> [$ Bu] [$ Pak] -> template final.
    Sapaan WIB: 04-10 pagi / 11-14 siang / 15-18 sore / 19-03 malam.
-6. Tombol [📋 Salin] via CopyTextButton (PTB v22.8 — payload plain text,
-   TANPA html escape; display saja yang html.escape).
+6. Pesan final = [info line 📖 Kelas: judul — kode (display only, BUKAN
+   payload)] + [template] + tombol [📋 Salin] (payload = template only,
+   CopyTextButton PTB v22.8 — plain text, TANPA html escape; display saja
+   yang html.escape). GUARD: payload > 256 (kode aneh/panjang) -> fallback
+   kirim tanpa tombol salin + hint "Tahan pesan utk salin" (tidak crash).
 
 Read-only flow (tidak tulis sheet) — semua baca via _run wrapper.
 """
@@ -140,11 +143,11 @@ def render_normal(c: sheets.ClassEntry, sapa: str, bu_pak: str, tgl: str) -> str
     return (
         f"Selamat {sapa} {bu_pak} {c.lecturer} 🙏\n\n"
         f"Izin mengingatkan untuk kelas yang akan berlangsung ya, {bu_pak}:\n\n"
-        f"📚 {c.subject} — {c.code}\n"
+        f"📚 {c.code}\n"
         f"📅 {hari}, {tgl_panjang}\n"
         f"⏰ {jam} WIB\n\n"
-        f"Kalau ada yang ingin ditanyakan atau didiskusikan seputar kelas nanti, "
-        f"boleh banget saya siap membantu. Terima kasih, {bu_pak} 🙏"
+        f"Kalau ada yang ingin ditanyakan seputar kelas nanti, boleh banget "
+        f"hubungi saya. Terima kasih, {bu_pak} 🙏"
     )
 
 
@@ -153,12 +156,12 @@ def render_backup(c: sheets.ClassEntry, sapa: str, bu_pak: str, tgl: str,
     hari, tgl_panjang, jam = _tanggal_line(c, tgl)
     return (
         f"Selamat {sapa} {bu_pak} {c.lecturer} 🙏\n\n"
-        f"Izin info, kelas nanti akan digantikan oleh rekan fasilitator lain ya, {bu_pak}:\n\n"
-        f"📚 {c.subject} — {c.code}\n"
+        f"Izin info, kelas nanti digantikan fasilitator lain ya, {bu_pak}:\n\n"
+        f"📚 {c.code}\n"
         f"📅 {hari}, {tgl_panjang}\n"
         f"⏰ {jam} WIB\n"
         f"👤 Pengganti: {pengganti} (menggantikan {fasil_awal})\n\n"
-        f"Kelas tetap jalan seperti jadwal ya, {bu_pak}. Terima kasih banyak 🙏"
+        f"Kelas tetap jalan seperti jadwal ya, {bu_pak}. Terima kasih 🙏"
     )
 
 
@@ -166,17 +169,51 @@ def render_reschedule(c: sheets.ClassEntry, sapa: str, bu_pak: str, tgl: str,
                       sebelumnya: str, jadwal_baru: str) -> str:
     return (
         f"Selamat {sapa} {bu_pak} {c.lecturer} 🙏\n\n"
-        f"Izin info, ada perubahan jadwal kelas nih, {bu_pak}:\n\n"
-        f"📚 {c.subject} — {c.code}\n"
-        f"🔙 Jadwal sebelumnya: {sebelumnya}\n"
+        f"Izin info, jadwal kelas berubah, {bu_pak}:\n\n"
+        f"📚 {c.code}\n"
+        f"🔙 Jadwal lama: {sebelumnya}\n"
         f"✅ Jadwal baru: {jadwal_baru}\n\n"
-        f"Mohon maaf atas perubahannya, dan terima kasih atas pengertiannya ya, {bu_pak} 🙏"
+        f"Mohon maaf, terima kasih atas pengertiannya ya, {bu_pak} 🙏"
     )
 
 
 def _display_copy(plain: str) -> tuple[str, str]:
     """(display html.escape, payload tombol Salin plain)."""
     return html.escape(plain), plain
+
+
+# Guard CopyTextButton: payload limit 256 — kode aneh/panjang -> fallback
+# tanpa tombol salin (long-press utk salin), jangan crash.
+_TG_COPY_LIMIT = 256
+
+
+def _final_message(plain: str, subject: str, code: str) -> tuple[str, InlineKeyboardMarkup]:
+    """(final display HTML, kb) — info line '📖 Kelas: judul — kode' hanya
+    di display; payload tombol Salin = template only. GUARD len(plain)>256
+    -> kirim tanpa tombol Salin + hint 'Tahan pesan utk salin'."""
+    info = f"📖 Kelas: {html.escape(subject)} — {html.escape(code)}"
+    if len(plain) <= _TG_COPY_LIMIT:
+        disp, payload = _display_copy(plain)
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📋 Salin", copy_text=CopyTextButton(payload))],
+            [InlineKeyboardButton("🔄 Template lain", callback_data="t:again")],
+        ])
+        return (
+            "✅ Template siap — tekan <b>📋 Salin</b> lalu tempel ke WhatsApp/Telegram dosen:\n\n"
+            f"{info}\n\n"
+            f"{disp}\n\n"
+            "<i>Ketik /reminder_dosen utk template lain.</i>"
+        ), kb
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Template lain", callback_data="t:again")],
+    ])
+    return (
+        "✅ Template siap — <b>Tahan pesan utk salin</b> (template terlalu panjang utk tombol Salin), "
+        "lalu tempel ke WhatsApp/Telegram dosen:\n\n"
+        f"{info}\n\n"
+        f"{html.escape(plain)}\n\n"
+        "<i>Ketik /reminder_dosen utk template lain.</i>"
+    ), kb
 
 
 # ---------- picker kelas (grup bertingkat, reuse log._group_picker_classes) ----------
@@ -468,16 +505,7 @@ async def pick_sapa(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     else:
         plain = render_reschedule(c, sapa, bu_pak, tgl,
                                   context.user_data["p_sebelum"], context.user_data["p_jadwal_baru"])
-    disp, payload = _display_copy(plain)
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 Salin", copy_text=CopyTextButton(payload))],
-        [InlineKeyboardButton("🔄 Template lain", callback_data="t:again")],
-    ])
-    final = (
-        "✅ Template siap — tekan <b>📋 Salin</b> lalu tempel ke WhatsApp/Telegram dosen:\n\n"
-        f"{disp}\n\n"
-        "<i>Ketik /reminder_dosen utk template lain.</i>"
-    )
+    final, kb = _final_message(plain, c.subject, c.code)
     try:
         await q.message.edit_text(final, parse_mode=ParseMode.HTML, reply_markup=kb)
     except Exception:

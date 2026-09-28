@@ -1,7 +1,7 @@
 # MEMORY — telegram-sheets-bot (TelefasilBot)
 
 > Per-project memory. Read at cold session start. Append-only.
-> Updated: 2026-09-28 (Fitur H+1 Follow-up **SHIPPED bf07be8**, pushed e34e86f..bf07be8; deploy MANUAL belum diklik → ACTIVE harus bf07be8)
+> Updated: 2026-09-28 (/reminder_dosen **SHIPPED 58b7271**, pushed bf07be8..58b7271; deploy MANUAL belum diklik → ACTIVE harus 58b7271)
 
 ## What
 Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, rekap kehadiran, backup, cancel kelas langsung ke Google Sheets. Multi-user (satu bot, tiap fasil lihat jadwal sendiri). Bot: [@telefasil_bot](https://t.me/telefasil_bot).
@@ -734,6 +734,7 @@ un_polling(stop_signals=(SIGINT,SIGTERM,SIGABRT)) — PTB v22 native, SIGTERM di
 - **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); gambar → vision agent. Cavemem MCP down — append manual.
 
 ## [2026-09-28] telegram-sheets-bot - /pengajar template chat ke dosen [SHIPPED] Working Tree
+> **STATUS UPDATE:** entry ini kini **COMMITTED `58b7271`** — pushed `bf07be8..58b7271` (HEAD main = 58b7271). Nama command final `/reminder_dosen` (underscore; hyphen DITOLAK Telegram API BotCommand). Detail penuh di entri SHIPPED terbaru (bawah). Railway deploy MANUAL — BELUM diklik.
 > **Project:** telegram-sheets-bot
 - **Fitur baru:** /pengajar (di-rename jadi **/reminder_dosen** — command name underscore, Telegram setMyCommands tolak hyphen) - generate template chat WhatsApp/Telegram ke dosen (read-only, tanpa tulis sheet). Flow: picker kelas grup (reuse handlers/log._group_picker_classes, kelas didelegasikan ikut tampil **🔀** via get_classes(include_delegated=True) - cache di-skip utk mode ini) -> jenis template 1 Normal / 2 Backup / 3 Reschedule -> tanggal (backup/make-up eksplisit; personal default 
 ext_date_for_day, step DATE kalau last!=next) -> backup prefill dari baris Backup ackup_context(kode,date) / reschedule prefill dari Cancel cancel_schedule_for(kode) (jadwal make-up L/M) + Tukar swap_tanggal, fallback tanya manual -> Bu/Pak -> final + tombol [📋 Salin] CopyTextButton (PTB v22.8, payload plain TANPA escape; display html.escape).
@@ -741,3 +742,26 @@ ext_date_for_day, step DATE kalau last!=next) -> backup prefill dari baris Backu
 ow utk verify. Conv reminder_dosen_conv, guard + timeout 1hr + back-nav + usage.log action="reminder_dosen" (	ipe=t1/t2/t3). Bot command "Template pesan ke dosen".
 - **VERIFIKASI:** scripts/verify/verify_reminder_dosen.py (BARU) **57 PASS** (sapaan 4 slot+boundary, render 3 template x Bu/Pak wording EXACT, escape vs payload salin, anchor tanggal, backup_context, cancel_schedule_for + prefill, sebelumnya, include_delegated, label picker) + py -m compileall OK + import handlers,bot OK + suite utama: **nol regresi** (6 fail erify_725423d/verify_s3/verify_stats_html/verify_stats_redesign/verify_tukar/verify_zoom_display = **pre-existing** di clean HEAD bf07be8: drift config eminder_hour, stats._build_report rename, Unicode cp1252 stdout).
 - **NEXT (user):** Railway **Deploy Latest Commit** setelah review. JANGAN commit (instruksi).
+
+## [2026-09-28] /reminder_dosen template chat ke dosen SHIPPED 58b7271
+> **SHIPPED** commit `58b7271` pushed `bf07be8..58b7271` (HEAD main = 58b7271). Railway deploy MANUAL selalu (auto-deploy off) — **BELUM diklik → ACTIVE harus jadi 58b7271**. Review **APPROVED** (0 S1-S3; 2 S4 nits non-blocking). Melengkapi entry working-tree di atas (`/pengajar` → rename `/reminder_dosen`).
+
+- **Fitur `/reminder_dosen` (underscore; hyphen DITOLAK Telegram API BotCommand — confirmed docs):** generate template chat WhatsApp/Telegram ke dosen, **read-only** (tanpa tulis sheet). Flow: picker kelas grup (reuse `log._group_picker_classes`, `include_delegated=True` label 🔀 — cache di-skip utk mode ini, hindari leak) → jenis template **1 Normal / 2 Backup / 3 Reschedule** → date step → tanya Bu/Pak → render + tombol **[📋 Salin]** CopyTextButton (PTB v22.8; payload plain TANPA escape, display html.escape).
+- **Sapaan WIB slot:** 04-10 **pagi**, 11-14 **siang**, 15-18 **sore**, 19-03 **malam** — TANPA "Selamat" di slot (template literal "Selamat {sapaan}", hindari "Selamat Selamat pagi"). `_sapaan_wib` parameter time utk verify.
+- **Template wording final user-approved** — santai, TANPA "dengan hormat"/"bersama ini".
+- **Files:**
+  - `handlers/reminder_dosen.py` (BARU, RENAME dari `pengajar.py`) + conv `reminder_dosen_conv`, guard + timeout 1hr + back-nav + `usage.log(action="reminder_dosen", tipe=t1/t2/t3)`.
+  - `sheets.py` — `get_classes(include_delegated)` (cache skip read+write utk hindari leak), `backup_context(kode, date)` (col B/E/I), `cancel_schedule_for(kode)` (col D/F/G/L/M) — semua read-only.
+  - `bot.py` BotCommand "Template pesan ke dosen", `start.py` HELP, `handlers/__init__.py` wiring.
+- **Keputusan:**
+  - Mapping dosen **Bu/Pak TIDAK ada file** — user pilih tiap generate.
+  - Reschedule jadwal baru **prefill Cancel/Tukar** (`cancel_schedule_for` + swap) else tanya manual.
+  - Backup pengganti **prefill backup row** (`backup_context`) else tanya manual.
+- **VERIFIKASI:** `scripts/verify/verify_reminder_dosen.py` (BARU, scripts/verify/) **57 PASS** (sapaan 4 slot+boundary, render 3 template × Bu/Pak wording EXACT, escape vs payload salin, anchor tanggal, backup_context, cancel_schedule_for + prefill, include_delegated, label picker) + `py -m compileall` OK + import handlers/bot OK + suite utama **nol regresi** (6 fail verify_725423d/verify_s3/verify_stats_html/verify_stats_redesign/verify_tukar/verify_zoom_display = **pre-existing** di clean HEAD bf07be8: drift config reminder_hour, stats._build_report rename, Unicode cp1252 stdout).
+- **Review nits (2 S4, non-blocking):** int parse tanpa try, `again()` loading kedua.
+- **PENDING (user "nanti dulu"):**
+  - **Gelombang-3 PERFORMA:** per-sheet lock, gather personal/backup/makeup parallel, rekap confirm parallel, cancel_swap batch, feedback TTL, absen ⏳ leak, border scan.
+  - **Gelombang-4:** users.json corruption backup S2, rate-limit per user, sanitize Sheets errors, heartbeat.log rotate, HELP /stats+/tukar_riwayat, secrets git hook, registration spoofing trust-model.
+  - **H+2 lookback** follow-up (dari bf07be8) + **3 dead code** gelombang-1.
+- **NEXT (user):** Railway **Deploy Latest Commit** → cek ACTIVE jadi **58b7271** → tes live `/reminder_dosen` (picker grup 🔀, 3 template, salin). VPS pending: Hostinger KVM 2 SG Rp155.900 / Hetzner CX23 / Oracle free.
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); gambar → vision agent. Cavemem MCP down — append manual.
