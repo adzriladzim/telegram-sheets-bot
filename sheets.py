@@ -1137,7 +1137,7 @@ class SheetsClient:
         if not 1 <= pertemuan <= 16:
             raise SheetsError("Pertemuan harus 1-16")
         col_idx = 3 + (pertemuan - 1)
-        total = hadir = feedback = tidak = belum = izin = 0
+        total = hadir = feedback = tidak = belum = izin = sakit = 0
         for _, rows, nim_header in blocks:
             for r_idx in range(nim_header + 2, len(rows)):
                 if rows[r_idx] and rows[r_idx][0].strip() == "Program Studi":
@@ -1155,11 +1155,13 @@ class SheetsClient:
                     tidak += 1
                 if val in ("SF", "OF"):
                     belum += 1
-                if val == "I":
+                if val in ("I", "SAKIT"):
                     izin += 1
+                if val == "SAKIT":
+                    sakit += 1
         sheets_list = sorted({b[0] for b in blocks})
         return {"total": total, "hadir": hadir, "feedback": feedback,
-                "tidak": tidak, "belum": belum, "izin": izin,
+                "tidak": tidak, "belum": belum, "izin": izin, "sakit": sakit,
                 "sheet": sheets_list[0] if sheets_list else "",
                 "prodi": sheets_list[0] if sheets_list else "",
                 "sheets": sheets_list}

@@ -295,6 +295,7 @@ Mencatat kehadiran mahasiswa ke sheet **Absen** (bot mendeteksi blok kelas di **
 | `O` | Hadir **Online** | Total + Hadir |
 | `A` | **Absent** (tanpa keterangan) | Total (tanpa hadir) |
 | `I` | **Izin** | Tidak masuk total hadir |
+| `Sakit` | **Sakit** | Tidak masuk total hadir (sama seperti `I`) |
 | `SF` `OF` | Status formal/terpisah | Masuk total, dipisah dari hadir biasa |
 
 **Alur step-by-step:**
@@ -305,7 +306,7 @@ Mencatat kehadiran mahasiswa ke sheet **Absen** (bot mendeteksi blok kelas di **
 | 2️⃣ | Pertemuan ke-? | Angka **1–16** |
 | 3️⃣ | Input via | Tombol `⌨️ Ketik NIM` / `☑️ Checklist Nama` / `📸 Upload Foto` |
 | 4️⃣ | Input data | Ketik NIM pisah koma, atau tap nama di checklist, atau kirim foto |
-| 5️⃣ | Status | Tombol S / O / A / I / SF / OF |
+| 5️⃣ | Status | Tombol S / O / A / I / Sakit / SF / OF |
 | 6️⃣ | Konfirmasi | `✅ Submit` |
 
 **Contoh (mode Ketik NIM):**

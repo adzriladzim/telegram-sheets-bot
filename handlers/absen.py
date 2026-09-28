@@ -132,7 +132,7 @@ def _method_kb() -> InlineKeyboardMarkup:
 def _status_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("S Onsite", callback_data="abs:S"), InlineKeyboardButton("O Online", callback_data="abs:O")],
-        [InlineKeyboardButton("A Absent", callback_data="abs:A"), InlineKeyboardButton("I Izin", callback_data="abs:I")],
+        [InlineKeyboardButton("A Absent", callback_data="abs:A"), InlineKeyboardButton("I Izin", callback_data="abs:I"), InlineKeyboardButton("🤒 Sakit", callback_data="abs:sakit")],
         [InlineKeyboardButton("SF", callback_data="abs:SF"), InlineKeyboardButton("OF", callback_data="abs:OF")],
         [InlineKeyboardButton("◀️ Kembali", callback_data="abs:back")],
     ])

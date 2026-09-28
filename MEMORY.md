@@ -1,7 +1,7 @@
 # MEMORY — telegram-sheets-bot (TelefasilBot)
 
 > Per-project memory. Read at cold session start. Append-only.
-> Updated: 2026-09-28 (/reminder_dosen **SHIPPED 58b7271**, pushed bf07be8..58b7271; deploy MANUAL belum diklik → ACTIVE harus 58b7271)
+> Updated: 2026-09-29 (fix /reminder_dosen CopyTextButton **SHIPPED 86b3262**, pushed 58b7271..86b3262; deploy MANUAL belum diklik → ACTIVE harus 86b3262)
 
 ## What
 Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, rekap kehadiran, backup, cancel kelas langsung ke Google Sheets. Multi-user (satu bot, tiap fasil lihat jadwal sendiri). Bot: [@telefasil_bot](https://t.me/telefasil_bot).
@@ -764,4 +764,23 @@ ow utk verify. Conv reminder_dosen_conv, guard + timeout 1hr + back-nav + usage.
   - **Gelombang-4:** users.json corruption backup S2, rate-limit per user, sanitize Sheets errors, heartbeat.log rotate, HELP /stats+/tukar_riwayat, secrets git hook, registration spoofing trust-model.
   - **H+2 lookback** follow-up (dari bf07be8) + **3 dead code** gelombang-1.
 - **NEXT (user):** Railway **Deploy Latest Commit** → cek ACTIVE jadi **58b7271** → tes live `/reminder_dosen` (picker grup 🔀, 3 template, salin). VPS pending: Hostinger KVM 2 SG Rp155.900 / Hetzner CX23 / Oracle free.
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); gambar → vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-29] fix /reminder_dosen CopyTextButton SHIPPED 86b3262
+> **SHIPPED** commit `86b3262` pushed `58b7271..86b3262` (HEAD main = 86b3262). Railway deploy MANUAL selalu (auto-deploy off) — **BELUM diklik → ACTIVE harus jadi 86b3262**. BUGFIX live user-approved. Verifikasi **185 PASS**.
+
+- **SYMPTOM (live):** payload CopyTextButton 282–300 cp > Telegram limit 256 (`MAX_COPY_TEXT`) → `BadRequest` saat edit + reply → "Terjadi kesalahan internal" utk SEMUA 3 jenis template (Normal/Backup/Reschedule). Akar: payload sebelum-fix = template + judul matkul → kelewat limit.
+- **FIX user-approved (`handlers/reminder_dosen.py`):**
+  - **Payload = kode matkul ONLY** (`📚 {c.code}` — renderer pakai `c.code`, judul TIDAK ikut payload).
+  - **Wording penutup di-trim** (render_normal L149-150 dipadatkan; render_backup/render_reschedule penutup di-ringkas).
+  - **Info line `📖 Kelas: judul — kode` display-only** (L194) — DI LUAR payload, hanya di pesan final.
+  - **Guard `_TG_COPY_LIMIT = 256` (L187)** + `_final_message(plain, subject, code)` (L190) — `len(plain) > 256` → kirim TANPA tombol 📋 Salin + hint **"Tahan pesan utk salin"** (long-press copy), bukan crash.
+- **Panjang final:** 238–250 cp / 243–253 utf-16 (margin ≥3 dari 256).
+- **VERIFIKASI:** `scripts/verify/verify_reminder_dosen.py` **185 PASS** (naik dari 58):
+  - **24 combo** = 3 jenis × Bu/Pak × 4 sapaan (pagi/siang/sore/malam) → semua len ≤256.
+  - Kode-in-payload (📚 kode hadir), judul-NOT-in-payload (subject tak bocor ke payload).
+  - Guard >256 → tanpa tombol Salin + hint (fallback).
+  - Regresi: escape vs payload, anchor tanggal, backup_context, cancel prefill, include_delegated, label picker — semua tetap PASS. `py -m compileall` OK.
+- **NEXT (user):** Railway **Deploy Latest Commit** → cek ACTIVE jadi **86b3262** → tes live `/reminder_dosen` → pilih kelas → Bu/Pak → template + tombol 📋 Salin jalan (tanpa "Terjadi kesalahan internal").
+- **PENDING (user "nanti dulu"):** **Gelombang-3 PERFORMA** (7 item: per-sheet lock, gather parallel, rekap confirm parallel, cancel_swap batch, feedback TTL, absen ⏳ leak, border scan); **Gelombang-4** (7 item: users.json corruption backup S2, rate-limit per user, sanitize Sheets errors, heartbeat.log rotate, HELP /stats+/tukar_riwayat, secrets git hook, registration spoofing trust-model); **H+2 lookback** (dari bf07be8); **3 dead code** gelombang-1.
 - **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); gambar → vision agent. Cavemem MCP down — append manual.
