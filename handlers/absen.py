@@ -104,10 +104,20 @@ async def back_to_kode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return KODE
 
 
+def _clear_absen_data(context) -> None:
+    """Buang key form absen yg stale (share per chat+user); input_from/status_from
+    cuma dipakai absen.py."""
+    for k in [k for k in context.user_data if k.startswith("absen_")]:
+        context.user_data.pop(k, None)
+    context.user_data.pop("input_from", None)
+    context.user_data.pop("status_from", None)
+
+
 async def back_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
     await q.message.reply_text("Dibatalkan.")
+    _clear_absen_data(context)
     return ConversationHandler.END
 
 
@@ -464,6 +474,7 @@ async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.effective_message.reply_text("Dibatalkan.")
+    _clear_absen_data(context)
     return ConversationHandler.END
 
 def register(app: Application, cfg: Config) -> None:

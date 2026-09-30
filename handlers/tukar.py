@@ -89,15 +89,29 @@ def _class_kb(classes, prefix="tk") -> InlineKeyboardMarkup:
 
 # ---------- finish early ----------
 
+_TK_KEYS = ("tk_classes", "tk_cls", "tk_kode_dia", "tk_partner", "tk_partner_opts",
+            "tk_pola", "tk_tanggal", "tk_jam")
+
+
+def _clear_tk_data(context) -> None:
+    """Buang key form tukar yg stale dari user_data (share per chat+user)."""
+    for k in _TK_KEYS:
+        context.user_data.pop(k, None)
+
+
 async def _do_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     if q:
         await q.answer()
     await update.effective_message.reply_text("Dibatalkan.")
+    _clear_tk_data(context)
     return ConversationHandler.END
 
 
 async def fallback_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.effective_message:
+        await update.effective_message.reply_text("Sesi tukar kedaluwarsa — kirim /tukar lagi.")
+    _clear_tk_data(context)
     return ConversationHandler.END
 
 
@@ -109,6 +123,7 @@ async def pick_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     classes = context.user_data.get("tk_classes") or []
     if not 0 <= idx < len(classes):
         await q.message.reply_text("Pilihan kedaluwarsa — kirim /tukar lagi.")
+        _clear_tk_data(context)
         return ConversationHandler.END
     c = classes[idx]
     context.user_data["tk_cls"] = c
@@ -201,6 +216,7 @@ async def pick_partner_opt(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     opts = context.user_data.get("tk_partner_opts") or []
     if not 0 <= idx < len(opts):
         await q.message.reply_text("Pilihan kedaluwarsa — kirim /tukar lagi.")
+        _clear_tk_data(context)
         return ConversationHandler.END
     return await _set_partner(update, context, opts[idx])
 
@@ -290,6 +306,7 @@ async def confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         c = context.user_data.get("tk_cls")
         if c is None:
             await q.message.reply_text("Sesi kadaluwarsa — kirim /tukar lagi.")
+            _clear_tk_data(context)
             return ConversationHandler.END
         dari_wib = datetime.now(sheets.WIB).strftime("%Y-%m-%d %H:%M")
         rec = sheets.SwapRecord(
@@ -498,7 +515,8 @@ def register(app: Application, cfg: Config) -> None:
                       CallbackQueryHandler(back_to_pola, pattern=r"^tk:back_pola$")],
             ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, fallback_cancel)],
         },
-        fallbacks=[CommandHandler("tukar", cmd_tukar)],
+        fallbacks=[CommandHandler("cancel", _do_cancel),
+                   CommandHandler("tukar", cmd_tukar)],
         conversation_timeout=_TTIMEOUT, name="tukar_conv",
         allow_reentry=True,
     )

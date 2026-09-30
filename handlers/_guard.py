@@ -14,6 +14,7 @@ update masuk semua conv sudah terdaftar.
 from __future__ import annotations
 
 from telegram import Update
+from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
 
 _REGISTRY: dict[str, ConversationHandler] = {}
@@ -65,13 +66,15 @@ async def guard_entry(
         st = state_of(chat_id, user_id, own_conv)
         if st is not None:
             return st
-    if active_name(chat_id, user_id) is not None:
+    active = active_name(chat_id, user_id)
+    if active is not None:
         msg = update.effective_message
         if msg is not None:
             try:
                 await msg.reply_text(
-                    "Kamu masih di tengah form lain — selesaikan atau ketik "
-                    f"/cancel dulu, baru mulai /{busy_label}."
+                    f"Kamu masih di tengah form <b>/{active.removesuffix('_conv')}</b> "
+                    f"— selesaikan atau ketik /cancel dulu, baru mulai /{busy_label}.",
+                    parse_mode=ParseMode.HTML,
                 )
             except Exception:
                 pass
