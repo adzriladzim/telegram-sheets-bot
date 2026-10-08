@@ -1,7 +1,7 @@
 # MEMORY — telegram-sheets-bot (TelefasilBot)
 
 > Per-project memory. Read at cold session start. Append-only.
-> Updated: 2026-09-29 (fix /reminder_dosen CopyTextButton **SHIPPED 86b3262**, pushed 58b7271..86b3262; deploy MANUAL belum diklik → ACTIVE harus 86b3262)
+> Updated: 2026-09-30 (fix stuck form /tukar BELUM commit; sebelumnya fitur opsi Sakit absen **SHIPPED 7e08613**, push 86b3262..7e08613; deploy MANUAL belum diklik → ACTIVE harus 7e08613)
 
 ## What
 Bot Telegram fasilitator **Cakrawala University** → catat Zoom Record, absen, rekap kehadiran, backup, cancel kelas langsung ke Google Sheets. Multi-user (satu bot, tiap fasil lihat jadwal sendiri). Bot: [@telefasil_bot](https://t.me/telefasil_bot).
@@ -783,4 +783,33 @@ ow utk verify. Conv reminder_dosen_conv, guard + timeout 1hr + back-nav + usage.
   - Regresi: escape vs payload, anchor tanggal, backup_context, cancel prefill, include_delegated, label picker — semua tetap PASS. `py -m compileall` OK.
 - **NEXT (user):** Railway **Deploy Latest Commit** → cek ACTIVE jadi **86b3262** → tes live `/reminder_dosen` → pilih kelas → Bu/Pak → template + tombol 📋 Salin jalan (tanpa "Terjadi kesalahan internal").
 - **PENDING (user "nanti dulu"):** **Gelombang-3 PERFORMA** (7 item: per-sheet lock, gather parallel, rekap confirm parallel, cancel_swap batch, feedback TTL, absen ⏳ leak, border scan); **Gelombang-4** (7 item: users.json corruption backup S2, rate-limit per user, sanitize Sheets errors, heartbeat.log rotate, HELP /stats+/tukar_riwayat, secrets git hook, registration spoofing trust-model); **H+2 lookback** (dari bf07be8); **3 dead code** gelombang-1.
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); gambar → vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-29] fitur opsi Sakit absen SHIPPED 7e08613
+> **SHIPPED** commit `7e08613` pushed `86b3262..7e08613` (HEAD main = 7e08613). Railway deploy MANUAL selalu (auto-deploy off) — **BELUM diklik → ACTIVE harus jadi 7e08613**. Verifikasi **11 PASS** (`scripts/verify/verify_absen_sakit.py`, `py -X utf8`, cp1252 console).
+
+- **Fitur:** tombol `🤒 Sakit` di `_status_kb.py:135` (callback `abs:sakit`, kena SEMUA mode: manual/checklist/back). Value sheet `sakit` lowercase verbatim. `_absen_counts` di `sheets.py:1140/1158-1159` bucket `val in ("I","SAKIT")` (normalize upper) → **sakit HITUNGAN SAMA IZIN**; counter field `sakit` terpisah reserved utk masa depan. README L297-298 tabel status.
+- **FAKTA AUDIT — 4 konsumen `_absen_counts`:** rekap `534/844`, laporan `345`, stats `191`, refresh_os `2060` — SEMUA pakai total/hadir/tidak/feedback; **TIDAK ada konsumen pakai `izin`** (izin = dead output, fakta audit). Rekap/LAPORAN TIDAK tampilkan izin-sakit (kolom rekap T/U/V kosong — **user TOLAK tambah kolom**). Preview absen `confirm_cb:449` tidak menampilkan izin → breakdown skip. Status sheet: S/O/A/I/SF/OF + baru `sakit` (case-insensitive, upper normalize).
+- **NEXT (user):** Railway **Deploy Latest Commit** → cek ACTIVE jadi **7e08613** → tes live `/absen` → pilih Sakit.
+- **PENDING (user "nanti dulu"):** **Gelombang-3 PERFORMA** (7 item); **Gelombang-4** (7 item); **H+2 lookback**; **3 dead code** gelombang-1; **VPS decision** (Hostinger KVM 2 SG Rp155.900 / Hetzner CX23 / Oracle free).
+- **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); gambar → vision agent. Cavemem MCP down — append manual.
+
+## [2026-09-30] Fix stuck form /tukar — deadlock guard_entry blockir /cancel (BELUM commit)
+> **BELUM commit** — hash belum ada (HEAD main = 7e08613; diff 3 file uncommitted, COMPILE OK). Railway deploy MANUAL selalu (auto-deploy off) — ACTIVE masih a022e30 (BELUM diklik Deploy).
+
+- **SYMPTOM (live):** user STUCK tak bisa pindah fitur; form lain yang running tak diketahui user (conv tukar aktif tak tampil).
+- **ROOT CAUSE CONFIRMED:** `tukar_conv` fallbacks TIDAK punya handler `/cancel` → user di tengah form tukar ketik /cancel → `guard_entry` (`handlers/_guard.py:68`) BLOCK /cancel krn conversation aktif → **DEADLOCK ~1 jam** (user tak bisa apa-apa). Bukan PTB allow_reentry (konvensi lama) — guard registry [2026-09-26 e34e86f] yang blokir.
+- **FIX (3 file):**
+  1. **handlers/tukar.py:501** — CommandHandler `/cancel` ditambah ke fallbacks conversation + `_clear_tk_data` (state tukar dibersihkan saat cancel).
+  2. **handlers/_guard.py guard_entry** — pesan blokir kini **SEBUT form aktif** (nama conv) + `parse_mode=HTML` (aman utk nama user) → user tahu form mana yang running, tak bingung.
+  3. **handlers/absen.py** — `_clear_absen_data` dipakai di cancel + back_cancel (state absen dibersihkan konsisten).
+  4. **Semua END path tukar** bersihkan `tk_*` keys user_data (tak nyangkut).
+- **REVIEW:**
+  - S2 (stale-key END paths) → FIXED.
+  - S3 (parse_mode + back_cancel) → FIXED.
+  - S4 follow-up (non-blocking): **8 conv lain belum selective cleanup** (hanya tukar yang dibersihkan selektif); guard pakai PTB **private `_conversations`** (bisa break saat major upgrade).
+- **VERIFIKASI:** `py -m compileall` OK (COMPILE OK). Belum deploy — Railway deploy MANUAL.
+- **STATUS:** uncommitted diff **3 file** (tukar.py, _guard.py, absen.py); HEAD = 7e08613; ACTIVE Railway masih a022e30.
+- **NEXT (user):** (1) commit → hash jadi ID entri; (2) Railway → **Deploy Latest Commit**; (3) tes live: user di tengah /tukar ketik /cancel → conv selesai + pesan sebut form aktif, bot responsif lagi.
+- **PELAJARAN:** tiap conv fallbacks WAJIB punya handler `/cancel` — kalau guard_entry blokir perintah netral, user keterjebak. Guard pesan harus sebut form aktif (bukan generic "sibuk").
 - **Rules tetap:** sync gspread = anti-pattern; JANGAN run lokal bareng Railway (409 Conflict); gambar → vision agent. Cavemem MCP down — append manual.

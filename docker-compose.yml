@@ -1,0 +1,29 @@
+services:
+  bot:
+    build: .
+    container_name: telefasilbot
+    env_file:
+      - .env
+    environment:
+      TZ: Asia/Jakarta
+      GOOGLE_SERVICE_ACCOUNT_JSON: secrets/service_account.json
+    volumes:
+      - ./data:/app/data
+      - ./secrets:/app/secrets:ro
+    restart: unless-stopped
+
+  # Buat nanti (n8n / agent tele lain) — jalanin pake:
+  # docker compose --profile tools up -d
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    profiles:
+      - tools
+    environment:
+      TZ: Asia/Jakarta
+    volumes:
+      - n8n_data:/home/node/.n8n
+    restart: unless-stopped
+
+volumes:
+  n8n_data:
